@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Globalization;
 using GitHub.Exports;
 using GitHub.Extensions;
 using GitHub.InlineReviews.Commands;
@@ -25,7 +26,6 @@ using Microsoft.VisualStudio.Text.Editor;
 using ReactiveUI;
 using Task = System.Threading.Tasks.Task;
 using Microsoft.VisualStudio.TextManager.Interop;
-using System.Text;
 using Microsoft.VisualStudio.Text.Projection;
 
 namespace GitHub.VisualStudio.UI.Views
