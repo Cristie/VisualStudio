@@ -26,7 +26,6 @@ namespace GitHub.Api
         const string ScopesHeader = "X-OAuth-Scopes";
         const string ProductName = Info.ApplicationInfo.ApplicationDescription;
         static readonly Logger log = LogManager.GetCurrentClassLogger();
-        static readonly Uri userEndpoint = new Uri("user", UriKind.Relative);
 
         readonly IObservableGitHubClient gitHubClient;
         // There are two sets of authorization scopes, old and new:
@@ -77,7 +76,7 @@ namespace GitHub.Api
             Guard.ArgumentNotEmptyString(path, nameof(path));
 
             var comment = new PullRequestReviewCommentCreate(body, commitId, path, position);
-            return gitHubClient.PullRequest.Comment.Create(owner, name, number, comment);
+            return gitHubClient.PullRequest.ReviewComment.Create(owner, name, number, comment);
         }
 
         public IObservable<PullRequestReviewComment> CreatePullRequestReviewComment(
@@ -88,7 +87,7 @@ namespace GitHub.Api
             int inReplyTo)
         {
             var comment = new PullRequestReviewCommentReplyCreate(body, inReplyTo);
-            return gitHubClient.PullRequest.Comment.CreateReply(owner, name, number, comment);
+            return gitHubClient.PullRequest.ReviewComment.CreateReply(owner, name, number, comment);
         }
 
         public IObservable<Gist> CreateGist(NewGist newGist)
@@ -96,30 +95,9 @@ namespace GitHub.Api
             return gitHubClient.Gist.Create(newGist);
         }
 
-        public IObservable<UserAndScopes> GetUser()
+        public IObservable<User> GetUser()
         {
-            return GetUserInternal().ToObservable();
-        }
-
-        async Task<UserAndScopes> GetUserInternal()
-        {
-            var response = await gitHubClient.Connection.Get<User>(
-                userEndpoint, null, null).ConfigureAwait(false);
-            var scopes = default(string[]);
-
-            if (response.HttpResponse.Headers.ContainsKey(ScopesHeader))
-            {
-                scopes = response.HttpResponse.Headers[ScopesHeader]
-                    .Split(',')
-                    .Select(x => x.Trim())
-                    .ToArray();
-            }
-            else
-            {
-                log.Error($"Error reading scopes: /user succeeded but {ScopesHeader} was not present.");
-            }
-
-            return new UserAndScopes(response.Body, scopes);
+            return gitHubClient.User.Current();
         }
 
         public IObservable<ApplicationAuthorization> GetOrCreateApplicationAuthenticationCode(
@@ -303,7 +281,7 @@ namespace GitHub.Api
             Guard.ArgumentNotEmptyString(owner, nameof(owner));
             Guard.ArgumentNotEmptyString(name, nameof(name));
 
-            return gitHubClient.PullRequest.Comment.GetAll(owner, name, number);
+            return gitHubClient.PullRequest.ReviewComment.GetAll(owner, name, number);
         }
 
         public IObservable<PullRequest> GetPullRequestsForRepository(string owner, string name)
