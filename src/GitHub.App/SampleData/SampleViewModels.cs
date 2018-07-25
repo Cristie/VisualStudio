@@ -1,29 +1,26 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Diagnostics.CodeAnalysis;
 using System.Reactive;
+using System.Threading.Tasks;
 using System.Windows.Input;
-using GitHub.Api;
-using GitHub.Authentication;
 using GitHub.Extensions;
 using GitHub.Models;
 using GitHub.Primitives;
-using GitHub.Services;
 using GitHub.UI;
 using GitHub.Validation;
 using GitHub.ViewModels;
+using GitHub.ViewModels.Dialog;
+using GitHub.ViewModels.TeamExplorer;
+using GitHub.VisualStudio.TeamExplorer.Connect;
 using GitHub.VisualStudio.TeamExplorer.Home;
 using ReactiveUI;
-using GitHub.VisualStudio.TeamExplorer.Connect;
-using System.Collections.ObjectModel;
-using System.Linq;
-using System.Reactive.Linq;
-using System.Threading.Tasks;
 
 namespace GitHub.SampleData
 {
     [ExcludeFromCodeCoverage]
-    public class RepositoryCreationViewModelDesigner : DialogViewModelBase, IRepositoryCreationViewModel
+    public class RepositoryCreationViewModelDesigner : ViewModelBase, IRepositoryCreationViewModel
     {
         public RepositoryCreationViewModelDesigner()
         {
@@ -55,7 +52,7 @@ namespace GitHub.SampleData
             SelectedLicense = Licenses[0];
         }
 
-        public new string Title { get { return "Create a GitHub Repository"; } } // TODO: this needs to be contextual
+        public string Title { get { return "Create a GitHub Repository"; } } // TODO: this needs to be contextual
 
         public IReadOnlyList<IAccount> Accounts
         {
@@ -187,7 +184,9 @@ namespace GitHub.SampleData
             set;
         }
 
-        public override IObservable<Unit> Done { get; }
+        public IObservable<object> Done { get; }
+
+        public Task InitializeAsync(IConnection connection) => Task.CompletedTask;
     }
 
     [ExcludeFromCodeCoverage]
@@ -198,31 +197,25 @@ namespace GitHub.SampleData
             public HostAddress HostAddress { get; set; }
 
             public string Username { get; set; }
-            public ObservableCollection<ILocalRepositoryModel> Repositories { get; set;  }
+            public ObservableCollection<ILocalRepositoryModel> Repositories { get; set; }
 
-            public IObservable<IConnection> Login()
-            {
-                return null;
-            }
+            public Octokit.User User => null;
+            public bool IsLoggedIn => true;
 
-            public void Logout()
-            {
-            }
-
-            public void Dispose()
-            {
-            }
+            public Exception ConnectionError => null;
         }
 
         public RepositoryPublishViewModelDesigner()
         {
-            Connections = new ObservableCollection<IConnection>
+            Connections = new ObservableCollectionEx<IConnection>
             {
                 new Conn() { HostAddress = new HostAddress() },
                 new Conn() { HostAddress = HostAddress.Create("ghe.io") }
             };
             SelectedConnection = Connections[0];
         }
+
+        public bool IsBusy { get; set; }
 
         public bool IsHostComboBoxVisible
         {
@@ -238,7 +231,7 @@ namespace GitHub.SampleData
             private set;
         }
 
-        public ObservableCollection<IConnection> Connections
+        public IReadOnlyObservableCollection<IConnection> Connections
         {
             get;
             private set;
@@ -247,64 +240,6 @@ namespace GitHub.SampleData
         public IConnection SelectedConnection
         {
             get; set;
-        }
-    }
-
-    [ExcludeFromCodeCoverage]
-    public sealed class RepositoryHostDesigner : ReactiveObject, IRepositoryHost
-    {
-        public RepositoryHostDesigner(string title)
-        {
-            this.Title = title;
-        }
-
-        public HostAddress Address
-        {
-            get;
-            private set;
-        }
-
-        public IApiClient ApiClient
-        {
-            get;
-            private set;
-        }
-
-        public bool IsLoggedIn
-        {
-            get;
-            private set;
-        }
-
-        public IModelService ModelService
-        {
-            get;
-            private set;
-        }
-
-        public string Title
-        {
-            get;
-            private set;
-        }
-
-        public void Dispose()
-        {
-        }
-
-        public IObservable<AuthenticationResult> LogIn(string usernameOrEmail, string password)
-        {
-            throw new NotImplementedException();
-        }
-
-        public IObservable<AuthenticationResult> LogInFromCache()
-        {
-            throw new NotImplementedException();
-        }
-
-        public IObservable<Unit> LogOut()
-        {
-            throw new NotImplementedException();
         }
     }
 
@@ -319,7 +254,7 @@ namespace GitHub.SampleData
         }
     }
 
-    public class RepositoryCloneViewModelDesigner : DialogViewModelBase, IRepositoryCloneViewModel
+    public class RepositoryCloneViewModelDesigner : ViewModelBase, IRepositoryCloneViewModel
     {
         public RepositoryCloneViewModelDesigner()
         {
@@ -366,7 +301,7 @@ namespace GitHub.SampleData
 
         public string FilterText { get; set; }
 
-        public new string Title { get { return "Clone a GitHub Repository"; } }
+        public string Title { get { return "Clone a GitHub Repository"; } }
 
         public IReactiveCommand<IReadOnlyList<IRemoteRepositoryModel>> LoadRepositoriesCommand
         {
@@ -409,7 +344,9 @@ namespace GitHub.SampleData
             private set;
         }
 
-        public override IObservable<Unit> Done { get; }
+        public IObservable<object> Done { get; }
+
+        public Task InitializeAsync(IConnection connection) => Task.CompletedTask;
     }
 
     public class GitHubHomeSectionDesigner : IGitHubHomeSection
@@ -459,12 +396,12 @@ namespace GitHub.SampleData
         public GitHubConnectSectionDesigner()
         {
             Repositories = new ObservableCollection<ILocalRepositoryModel>();
-            Repositories.Add(new LocalRepositoryModel("octokit", new UriString("https://github.com/octokit/octokit.net"), @"C:\Users\user\Source\Repos\octokit.net"));
-            Repositories.Add(new LocalRepositoryModel("cefsharp", new UriString("https://github.com/cefsharp/cefsharp"), @"C:\Users\user\Source\Repos\cefsharp"));
-            Repositories.Add(new LocalRepositoryModel("git-lfs", new UriString("https://github.com/github/git-lfs"), @"C:\Users\user\Source\Repos\git-lfs"));
-            Repositories.Add(new LocalRepositoryModel("another octokit", new UriString("https://github.com/octokit/octokit.net"), @"C:\Users\user\Source\Repos\another-octokit.net"));
-            Repositories.Add(new LocalRepositoryModel("some cefsharp", new UriString("https://github.com/cefsharp/cefsharp"), @"C:\Users\user\Source\Repos\something-else"));
-            Repositories.Add(new LocalRepositoryModel("even more git-lfs", new UriString("https://github.com/github/git-lfs"), @"C:\Users\user\Source\Repos\A different path"));
+            Repositories.Add(new LocalRepositoryModel("octokit", new UriString("https://github.com/octokit/octokit.net"), @"C:\Users\user\Source\Repos\octokit.net", new GitServiceDesigner()));
+            Repositories.Add(new LocalRepositoryModel("cefsharp", new UriString("https://github.com/cefsharp/cefsharp"), @"C:\Users\user\Source\Repos\cefsharp", new GitServiceDesigner()));
+            Repositories.Add(new LocalRepositoryModel("git-lfs", new UriString("https://github.com/github/git-lfs"), @"C:\Users\user\Source\Repos\git-lfs", new GitServiceDesigner()));
+            Repositories.Add(new LocalRepositoryModel("another octokit", new UriString("https://github.com/octokit/octokit.net"), @"C:\Users\user\Source\Repos\another-octokit.net", new GitServiceDesigner()));
+            Repositories.Add(new LocalRepositoryModel("some cefsharp", new UriString("https://github.com/cefsharp/cefsharp"), @"C:\Users\user\Source\Repos\something-else", new GitServiceDesigner()));
+            Repositories.Add(new LocalRepositoryModel("even more git-lfs", new UriString("https://github.com/github/git-lfs"), @"C:\Users\user\Source\Repos\A different path", new GitServiceDesigner()));
         }
 
         public ObservableCollection<ILocalRepositoryModel> Repositories

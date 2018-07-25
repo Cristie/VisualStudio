@@ -56,18 +56,12 @@ namespace GitHub.VisualStudio.Base
         {
             Guard.ArgumentNotNull(serviceProvider, nameof(serviceProvider));
 
-#if DEBUG
-            //VsOutputLogger.WriteLine("{0:HHmmssff}\t{1} Initialize", DateTime.Now, GetType());
-#endif
             TEServiceProvider = serviceProvider;
             Debug.Assert(holder != null, "Could not get an instance of TeamExplorerServiceHolder");
             if (holder == null)
                 return;
             holder.ServiceProvider = TEServiceProvider;
             SubscribeToRepoChanges();
-#if DEBUG
-            //VsOutputLogger.WriteLine("{0:HHmmssff}\t{1} Initialize DONE", DateTime.Now, GetType());
-#endif
         }
 
 
@@ -132,7 +126,7 @@ namespace GitHub.VisualStudio.Base
             {
                 var repo = await SimpleApiClient.GetRepository();
 
-                if ((repo.FullName == ActiveRepoName || repo.Id == 0) && SimpleApiClient.IsEnterprise())
+                if ((repo.FullName == ActiveRepoName || repo.Id == 0) && await SimpleApiClient.IsEnterprise())
                 {
                     return RepositoryOrigin.Enterprise;
                 }
@@ -145,6 +139,12 @@ namespace GitHub.VisualStudio.Base
         {
             var origin = await GetRepositoryOrigin();
             return origin == RepositoryOrigin.DotCom || origin == RepositoryOrigin.Enterprise;
+        }
+
+        protected async Task<bool> IsAGitHubDotComRepo()
+        {
+            var origin = await GetRepositoryOrigin();
+            return origin == RepositoryOrigin.DotCom;
         }
 
         protected async Task<bool> IsUserAuthenticated()

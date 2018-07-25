@@ -1,16 +1,16 @@
 ﻿using System;
-using System.Diagnostics;
-using GitHub.Services;
-using Microsoft.TeamFoundation.Controls;
-using GitHub.Extensions;
-using System.ComponentModel.Composition;
 using System.Collections.Generic;
-using Microsoft.VisualStudio.Shell;
-using Microsoft.VisualStudio.TeamFoundation.Git.Extensibility;
+using System.ComponentModel.Composition;
 using System.Linq;
-using System.Threading;
-using System.Globalization;
+using GitHub.Extensions;
+using GitHub.Logging;
 using GitHub.Models;
+using GitHub.Services;
+using Serilog;
+using Microsoft.TeamFoundation.Controls;
+using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Threading;
+using System.Windows;
 
 namespace GitHub.VisualStudio.Base
 {
@@ -18,20 +18,42 @@ namespace GitHub.VisualStudio.Base
     [PartCreationPolicy(CreationPolicy.Shared)]
     public class TeamExplorerServiceHolder : ITeamExplorerServiceHolder
     {
+        static readonly ILogger log = LogManager.ForContext<TeamExplorerServiceHolder>();
+
         readonly Dictionary<object, Action<ILocalRepositoryModel>> activeRepoHandlers = new Dictionary<object, Action<ILocalRepositoryModel>>();
         ILocalRepositoryModel activeRepo;
         bool activeRepoNotified = false;
 
         IServiceProvider serviceProvider;
-        IGitExt gitService;
-        UIContext gitUIContext;
+        readonly IVSGitExt gitService;
 
-        // ActiveRepositories PropertyChanged event comes in on a non-main thread
-        readonly SynchronizationContext syncContext;
-
-        public TeamExplorerServiceHolder()
+        /// <summary>
+        /// This class relies on IVSGitExt that provides information when VS switches repositories.
+        /// </summary>
+        /// <param name="gitService">Used for monitoring the active repository.</param>
+        [ImportingConstructor]
+        TeamExplorerServiceHolder(IVSGitExt gitService) : this(gitService, ThreadHelper.JoinableTaskContext)
         {
-            syncContext = SynchronizationContext.Current;
+        }
+
+        /// <summary>
+        /// This constructor can be used for unit testing.
+        /// </summary>
+        /// <param name="gitService">Used for monitoring the active repository.</param>
+        /// <param name="joinableTaskFactory">Used for switching to the Main thread.</param>
+        public TeamExplorerServiceHolder(IVSGitExt gitService, JoinableTaskContext joinableTaskContext)
+        {
+            JoinableTaskCollection = joinableTaskContext.CreateCollection();
+            JoinableTaskCollection.DisplayName = nameof(TeamExplorerServiceHolder);
+            JoinableTaskFactory = joinableTaskContext.CreateFactory(JoinableTaskCollection);
+
+            // This might be null in Blend or SafeMode
+            if (gitService != null)
+            {
+                this.gitService = gitService;
+                UpdateActiveRepo();
+                gitService.ActiveRepositoriesChanged += UpdateActiveRepo;
+            }
         }
 
         // set by the sections when they get initialized
@@ -46,8 +68,6 @@ namespace GitHub.VisualStudio.Base
                 serviceProvider = value;
                 if (serviceProvider == null)
                     return;
-                GitUIContext = GitUIContext ?? UIContext.FromUIContextGuid(new Guid(Guids.GitSccProviderId));
-                UIContextChanged(GitUIContext?.IsActive ?? false, false);
             }
         }
 
@@ -74,7 +94,7 @@ namespace GitHub.VisualStudio.Base
 
             bool notificationsExist;
             ILocalRepositoryModel repo;
-            lock(activeRepoHandlers)
+            lock (activeRepoHandlers)
             {
                 repo = ActiveRepo;
                 notificationsExist = activeRepoNotified;
@@ -120,12 +140,6 @@ namespace GitHub.VisualStudio.Base
             ServiceProvider = null;
         }
 
-        public void Refresh()
-        {
-            GitUIContext = GitUIContext ?? UIContext.FromUIContextGuid(new Guid(Guids.GitSccProviderId));
-            UIContextChanged(GitUIContext?.IsActive ?? false, true);
-        }
-
         void NotifyActiveRepo()
         {
             lock (activeRepoHandlers)
@@ -136,60 +150,19 @@ namespace GitHub.VisualStudio.Base
             }
         }
 
-        void UIContextChanged(object sender, UIContextChangedEventArgs e)
+        void UpdateActiveRepo()
         {
-            Guard.ArgumentNotNull(e, nameof(e));
+            var repo = gitService.ActiveRepositories.FirstOrDefault();
 
-            ActiveRepo = null;
-            UIContextChanged(e.Activated, false);
-        }
-
-        async void UIContextChanged(bool active, bool refresh)
-        {
-            Debug.Assert(ServiceProvider != null, "UIContextChanged called before service provider is set");
-            if (ServiceProvider == null)
-                return;
-
-            if (active)
+            if (!Equals(repo, ActiveRepo))
             {
-                GitService = GitService ?? ServiceProvider.GetServiceSafe<IGitExt>();
-                if (ActiveRepo == null || refresh)
-                    ActiveRepo = await System.Threading.Tasks.Task.Run(() =>
-                    {
-                        var repos = GitService?.ActiveRepositories;
-                        // Looks like this might return null after a while, for some unknown reason
-                        // if it does, let's refresh the GitService instance in case something got wonky
-                        // and try again. See issue #23
-                        if (repos == null)
-                        {
-                            VsOutputLogger.WriteLine(string.Format(CultureInfo.CurrentCulture, "Error 2001: ActiveRepositories is null. GitService: '{0}'", GitService));
-                            GitService = ServiceProvider?.GetServiceSafe<IGitExt>();
-                            repos = GitService?.ActiveRepositories;
-                            if (repos == null)
-                                VsOutputLogger.WriteLine(string.Format(CultureInfo.CurrentCulture, "Error 2002: ActiveRepositories is null. GitService: '{0}'", GitService));
-                        }
-                        return repos?.FirstOrDefault()?.ToModel();
-                    });
+                // Fire property change events on Main thread
+                JoinableTaskFactory.RunAsync(async () =>
+                {
+                    await JoinableTaskFactory.SwitchToMainThreadAsync();
+                    ActiveRepo = repo;
+                }).Task.Forget(log);
             }
-            else
-                ActiveRepo = null;
-        }
-
-        void CheckAndUpdate(object sender, System.ComponentModel.PropertyChangedEventArgs e)
-        {
-            Guard.ArgumentNotNull(e, nameof(e));
-
-            if (e.PropertyName != "ActiveRepositories")
-                return;
-
-            var service = GitService;
-            if (service == null)
-                return;
-
-            var repo = service.ActiveRepositories.FirstOrDefault()?.ToModel();
-            if (repo != ActiveRepo)
-                // so annoying that this is on the wrong thread
-                syncContext.Post(r => ActiveRepo = r as ILocalRepositoryModel, repo);
         }
 
         void ActiveRepoPropertyChanged(object sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -218,45 +191,7 @@ namespace GitHub.VisualStudio.Base
             get { return ServiceProvider.GetServiceSafe<ITeamExplorerPage>(); }
         }
 
-        UIContext GitUIContext
-        {
-            get { return gitUIContext; }
-            set
-            {
-                if (gitUIContext == value)
-                    return;
-                if (gitUIContext != null)
-                    gitUIContext.UIContextChanged -= UIContextChanged;
-                gitUIContext = value;
-                if (gitUIContext != null)
-                    gitUIContext.UIContextChanged += UIContextChanged;
-            }
-        }
-
-        IGitExt GitService
-        {
-            get { return gitService; }
-            set
-            {
-                if (gitService == value)
-                    return;
-                if (gitService != null)
-                    gitService.PropertyChanged -= CheckAndUpdate;
-                gitService = value;
-                if (gitService != null)
-                    gitService.PropertyChanged += CheckAndUpdate;
-            }
-        }
-    }
-
-    static class IGitRepositoryInfoExtensions
-    {
-        /// <summary>
-        /// Create a LocalRepositoryModel from a VS git repo object
-        /// </summary>
-        public static ILocalRepositoryModel ToModel(this IGitRepositoryInfo repo)
-        {
-            return repo == null ? null : new LocalRepositoryModel(repo.RepositoryPath);
-        }
+        public JoinableTaskCollection JoinableTaskCollection { get; }
+        JoinableTaskFactory JoinableTaskFactory { get; }
     }
 }

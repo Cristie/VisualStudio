@@ -1,15 +1,14 @@
 ﻿using System;
-using System.Windows.Controls;
 using System.Windows.Input;
-using System.Windows.Threading;
 using GitHub.InlineReviews.ViewModels;
 using GitHub.Services;
+using GitHub.UI;
 using Microsoft.VisualStudio.Shell;
 using ReactiveUI;
 
 namespace GitHub.InlineReviews.Views
 {
-    public class GenericCommentView : GitHub.UI.ViewBase<ICommentViewModel, GenericCommentView> { }
+    public class GenericCommentView : ViewBase<ICommentViewModel, GenericCommentView> { }
 
     public partial class CommentView : GenericCommentView
     {
@@ -32,7 +31,7 @@ namespace GitHub.InlineReviews.Views
 
         void DoOpenOnGitHub()
         {
-            GetBrowser().OpenUrl(ViewModel.Thread.GetCommentUrl(ViewModel.Id));
+            GetBrowser().OpenUrl(ViewModel.WebUrl);
         }
 
         private void CommentView_Loaded(object sender, System.Windows.RoutedEventArgs e)

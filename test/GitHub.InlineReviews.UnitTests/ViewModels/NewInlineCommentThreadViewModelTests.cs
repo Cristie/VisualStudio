@@ -1,79 +1,81 @@
-﻿using System;
+﻿using System.Collections.Generic;
 using System.ComponentModel;
-using System.Reactive.Linq;
-using GitHub.Api;
 using GitHub.InlineReviews.ViewModels;
 using GitHub.Models;
 using GitHub.Services;
 using NSubstitute;
-using Octokit;
-using Xunit;
+using NUnit.Framework;
 
 namespace GitHub.InlineReviews.UnitTests.ViewModels
 {
     public class NewInlineCommentThreadViewModelTests
     {
-        [Fact]
+        public NewInlineCommentThreadViewModelTests()
+        {
+            Splat.ModeDetector.Current.SetInUnitTestRunner(true);
+        }
+
+        [Test]
         public void CreatesReplyPlaceholder()
         {
             var target = new NewInlineCommentThreadViewModel(
-                Substitute.For<IPullRequestSession>(),
+                CreateSession(),
                 Substitute.For<IPullRequestSessionFile>(),
                 10,
                 false);
 
-            Assert.Equal(1, target.Comments.Count);
-            Assert.Equal(string.Empty, target.Comments[0].Body);
-            Assert.Equal(CommentEditState.Editing, target.Comments[0].EditState);
+            Assert.That(target.Comments, Has.One.Items);
+            Assert.That(target.Comments[0].Body, Is.EqualTo(string.Empty));
+            Assert.That(target.Comments[0].EditState, Is.EqualTo(CommentEditState.Editing));
         }
 
-        [Fact]
+        [Test]
         public void NeedsPushTracksFileCommitSha()
         {
             var file = CreateFile();
             var target = new NewInlineCommentThreadViewModel(
-                Substitute.For<IPullRequestSession>(),
+                CreateSession(),
                 file,
                 10,
                 false);
 
-            Assert.False(target.NeedsPush);
-            Assert.True(target.PostComment.CanExecute(false));
+            Assert.That(target.NeedsPush, Is.False);
+            Assert.That(target.PostComment.CanExecute(false), Is.True);
 
             file.CommitSha.Returns((string)null);
             RaisePropertyChanged(file, nameof(file.CommitSha));
-            Assert.True(target.NeedsPush);
-            Assert.False(target.PostComment.CanExecute(false));
+            Assert.That(target.NeedsPush, Is.True);
+            Assert.That(target.PostComment.CanExecute(false), Is.False);
 
             file.CommitSha.Returns("COMMIT_SHA");
             RaisePropertyChanged(file, nameof(file.CommitSha));
-            Assert.False(target.NeedsPush);
-            Assert.True(target.PostComment.CanExecute(false));
+            Assert.That(target.NeedsPush, Is.False);
+            Assert.That(target.PostComment.CanExecute(false), Is.True);
         }
 
-        [Fact]
+        [Test]
         public void PlaceholderCommitEnabledWhenCommentHasBodyAndPostCommentIsEnabled()
         {
             var file = CreateFile();
             var target = new NewInlineCommentThreadViewModel(
-                Substitute.For<IPullRequestSession>(),
+                CreateSession(),
                 file,
                 10,
                 false);
 
             file.CommitSha.Returns((string)null);
             RaisePropertyChanged(file, nameof(file.CommitSha));
-            Assert.False(target.Comments[0].CommitEdit.CanExecute(null));
+            Assert.That(target.Comments[0].CommitEdit.CanExecute(null), Is.False);
 
             target.Comments[0].Body = "Foo";
-            Assert.False(target.Comments[0].CommitEdit.CanExecute(null));
+            Assert.That(target.Comments[0].CommitEdit.CanExecute(null), Is.False);
 
             file.CommitSha.Returns("COMMIT_SHA");
             RaisePropertyChanged(file, nameof(file.CommitSha));
-            Assert.True(target.Comments[0].CommitEdit.CanExecute(null));
+            Assert.That(target.Comments[0].CommitEdit.CanExecute(null), Is.True);
         }
 
-        [Fact]
+        [Test]
         public void PostsCommentToCorrectAddedLine()
         {
             var session = CreateSession();
@@ -87,10 +89,11 @@ namespace GitHub.InlineReviews.UnitTests.ViewModels
                 "New Comment",
                 "COMMIT_SHA",
                 "file.cs",
+                Arg.Any<IReadOnlyList<DiffChunk>>(),
                 5);
         }
 
-        [Fact]
+        [Test]
         public void AddsCommentToCorrectDeletedLine()
         {
             var session = CreateSession();
@@ -116,32 +119,8 @@ namespace GitHub.InlineReviews.UnitTests.ViewModels
                 "New Comment",
                 "COMMIT_SHA",
                 "file.cs",
+                Arg.Any<IReadOnlyList<DiffChunk>>(),
                 7);
-        }
-
-        [Fact]
-        public void SignalsFinishedWhenCommentPosted()
-        {
-            var session = CreateSession();
-            var file = CreateFile();
-            var target = new NewInlineCommentThreadViewModel(session, file, 10, false);
-            var signalled = false;
-
-            target.Finished.Subscribe(_ => signalled = true);
-            Assert.False(signalled);
-
-            target.Comments[0].Body = "New Comment";
-            target.Comments[0].CommitEdit.Execute(null);
-
-            Assert.True(signalled);
-        }
-
-        IApiClient CreateApiClient()
-        {
-            var result = Substitute.For<IApiClient>();
-            result.CreatePullRequestReviewComment(null, null, 0, null, null, null, 0)
-                .ReturnsForAnyArgs(_ => Observable.Return(new PullRequestReviewComment()));
-            return result;
         }
 
         IPullRequestSessionFile CreateFile()
@@ -168,7 +147,8 @@ namespace GitHub.InlineReviews.UnitTests.ViewModels
             result.RepositoryOwner.Returns("owner");
             result.LocalRepository.Name.Returns("repo");
             result.LocalRepository.Owner.Returns("shouldnt-be-used");
-            result.PullRequest.Number.Returns(47);
+            result.PullRequest.Returns(new PullRequestDetailModel { Number = 47 });
+            result.User.Returns(new ActorModel());
             return result;
         }
 

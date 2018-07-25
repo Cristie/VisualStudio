@@ -7,17 +7,12 @@ using System.Reactive;
 using System.Reactive.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using GitHub.Extensions;
+using GitHub.Logging;
 using GitHub.Primitives;
-using NLog;
 using Octokit;
 using Octokit.Reactive;
-using ReactiveUI;
-using System.Threading.Tasks;
-using System.Reactive.Threading.Tasks;
-using Octokit.Internal;
-using System.Collections.Generic;
-using GitHub.Models;
-using GitHub.Extensions;
+using Serilog;
 
 namespace GitHub.Api
 {
@@ -25,16 +20,9 @@ namespace GitHub.Api
     {
         const string ScopesHeader = "X-OAuth-Scopes";
         const string ProductName = Info.ApplicationInfo.ApplicationDescription;
-        static readonly Logger log = LogManager.GetCurrentClassLogger();
+        static readonly ILogger log = LogManager.ForContext<ApiClient>();
 
         readonly IObservableGitHubClient gitHubClient;
-        // There are two sets of authorization scopes, old and new:
-        // The old scopes must be used by older versions of Enterprise that don't support the new scopes:
-        readonly string[] oldAuthorizationScopes = { "user", "repo", "gist" };
-        // These new scopes include write:public_key, which allows us to add public SSH keys to an account:
-        readonly string[] newAuthorizationScopes = { "user", "repo", "gist", "write:public_key" };
-        readonly static Lazy<string> lazyNote = new Lazy<string>(() => ProductName + " on " + GetMachineNameSafe());
-        readonly static Lazy<string> lazyFingerprint = new Lazy<string>(GetFingerprint);
 
         string ClientId { get; set; }
         string ClientSecret { get; set; }
@@ -58,6 +46,38 @@ namespace GitHub.Api
             var client = gitHubClient.Repository;
 
             return (isUser ? client.Create(repository) : client.Create(login, repository));
+        }
+
+        public IObservable<Repository> ForkRepository(string owner, string name, NewRepositoryFork repository)
+        {
+            Guard.ArgumentNotEmptyString(owner, nameof(owner));
+            Guard.ArgumentNotEmptyString(name, nameof(name));
+            Guard.ArgumentNotNull(repository, nameof(repository));
+
+            var client = gitHubClient.Repository.Forks;
+
+            return client.Create(owner, name, repository);
+        }
+
+        public IObservable<PullRequestReview> PostPullRequestReview(
+            string owner,
+            string name,
+            int number,
+            string commitId,
+            string body,
+            PullRequestReviewEvent e)
+        {
+            Guard.ArgumentNotEmptyString(owner, nameof(owner));
+            Guard.ArgumentNotEmptyString(name, nameof(name));
+
+            var review = new PullRequestReviewCreate
+            {
+                Body = body,
+                CommitId = commitId,
+                Event = e,
+            };
+
+            return gitHubClient.PullRequest.Review.Create(owner, name, number, review);
         }
 
         public IObservable<PullRequestReviewComment> CreatePullRequestReviewComment(
@@ -90,9 +110,32 @@ namespace GitHub.Api
             return gitHubClient.PullRequest.ReviewComment.CreateReply(owner, name, number, comment);
         }
 
+        public IObservable<PullRequestReviewComment> EditPullRequestReviewComment(
+            string owner,
+            string name,
+            int number,
+            string body)
+        {
+            var pullRequestReviewCommentEdit = new PullRequestReviewCommentEdit(body);
+            return gitHubClient.PullRequest.ReviewComment.Edit(owner, name, number, pullRequestReviewCommentEdit);
+        }
+
+        public IObservable<Unit> DeletePullRequestReviewComment(
+            string owner,
+            string name,
+            int number)
+        {
+            return gitHubClient.PullRequest.ReviewComment.Delete(owner, name, number);
+        }
+
         public IObservable<Gist> CreateGist(NewGist newGist)
         {
             return gitHubClient.Gist.Create(newGist);
+        }
+
+        public IObservable<Repository> GetForks(string owner, string name)
+        {
+            return gitHubClient.Repository.Forks.GetAll(owner, name);
         }
 
         public IObservable<User> GetUser()
@@ -100,40 +143,9 @@ namespace GitHub.Api
             return gitHubClient.User.Current();
         }
 
-        public IObservable<ApplicationAuthorization> GetOrCreateApplicationAuthenticationCode(
-            Func<TwoFactorAuthorizationException, IObservable<TwoFactorChallengeResult>> twoFactorChallengeHander,
-            string authenticationCode = null,
-            bool useOldScopes = false,
-            bool useFingerPrint = true)
+        public IObservable<User> GetUser(string login)
         {
-            var newAuthorization = new NewAuthorization
-            {
-                Scopes = useOldScopes
-                    ? oldAuthorizationScopes
-                    : newAuthorizationScopes,
-                Note = lazyNote.Value,
-                Fingerprint = useFingerPrint ? lazyFingerprint.Value : null
-            };
-
-            Func<TwoFactorAuthorizationException, IObservable<TwoFactorChallengeResult>> dispatchedHandler =
-                ex => Observable.Start(() => twoFactorChallengeHander(ex), RxApp.MainThreadScheduler).Merge();
-
-            var authorizationsClient = gitHubClient.Authorization;
-
-            return string.IsNullOrEmpty(authenticationCode)
-                ? authorizationsClient.CreateAndDeleteExistingApplicationAuthorization(
-                        ClientId,
-                        ClientSecret,
-                        newAuthorization,
-                        dispatchedHandler,
-                        true)
-                :   authorizationsClient.CreateAndDeleteExistingApplicationAuthorization(
-                        ClientId,
-                        ClientSecret,
-                        newAuthorization,
-                        dispatchedHandler,
-                        authenticationCode,
-                        true);
+            return gitHubClient.User.Get(login);
         }
 
         public IObservable<Organization> GetOrganizations()
@@ -171,30 +183,10 @@ namespace GitHub.Api
 
         public HostAddress HostAddress { get; }
 
-        static string GetSha256Hash(string input)
-        {
-            Guard.ArgumentNotEmptyString(input, nameof(input));
-
-            try
-            {
-                using (var sha256 = SHA256.Create())
-                {
-                    var bytes = Encoding.UTF8.GetBytes(input);
-                    var hash = sha256.ComputeHash(bytes);
-
-                    return string.Join("", hash.Select(b => b.ToString("x2", CultureInfo.InvariantCulture)));
-                }
-            }
-            catch (Exception e)
-            {
-                log.Error("IMPOSSIBLE! Generating Sha256 hash caused an exception.", e);
-                return null;
-            }
-        }
-
         static string GetFingerprint()
         {
-            return GetSha256Hash(ProductName + ":" + GetMachineIdentifier());
+            var fingerprint = ProductName + ":" + GetMachineIdentifier();
+            return fingerprint.GetSha256Hash();
         }
 
         static string GetMachineNameSafe()
@@ -205,14 +197,14 @@ namespace GitHub.Api
             }
             catch (Exception e)
             {
-                log.Info("Failed to retrieve host name using `DNS.GetHostName`.", e);
+                log.Warning(e, "Failed to retrieve host name using `DNS.GetHostName`");
                 try
                 {
                     return Environment.MachineName;
                 }
                 catch (Exception ex)
                 {
-                    log.Info("Failed to retrieve host name using `Environment.MachineName`.", ex);
+                    log.Warning(ex, "Failed to retrieve host name using `Environment.MachineName`");
                     return "(unknown)";
                 }
             }
@@ -233,7 +225,7 @@ namespace GitHub.Api
             }
             catch (Exception e)
             {
-                log.Info("Could not retrieve MAC address. Fallback to using machine name.", e);
+                log.Warning(e, "Could not retrieve MAC address. Fallback to using machine name");
                 return GetMachineNameSafe();
             }
         }
@@ -290,7 +282,8 @@ namespace GitHub.Api
             Guard.ArgumentNotEmptyString(name, nameof(name));
 
             return gitHubClient.PullRequest.GetAllForRepository(owner, name,
-                new PullRequestRequest {
+                new PullRequestRequest
+                {
                     State = ItemStateFilter.All,
                     SortProperty = PullRequestSort.Updated,
                     SortDirection = SortDirection.Descending
@@ -316,11 +309,7 @@ namespace GitHub.Api
             Guard.ArgumentNotEmptyString(owner, nameof(owner));
             Guard.ArgumentNotEmptyString(repo, nameof(repo));
 
-#pragma warning disable CS0618
-            // GetAllBranches is obsolete, but don't want to introduce the change to fix the
-            // warning in the PR, so disabling for now.
-            return gitHubClient.Repository.GetAllBranches(owner, repo);
-#pragma warning restore
+            return gitHubClient.Repository.Branch.GetAll(owner, repo);
         }
 
         public IObservable<Repository> GetRepository(string owner, string repo)

@@ -1,29 +1,39 @@
 ﻿// This is an automatically generated file, based on settings.json and PackageSettingsGen.tt
 /* settings.json content:
 {
-    "settings": [
+  "settings": [
     {
-        "name": "CollectMetrics",
-        "type": "bool",
-        "default": "true"
+      "name": "CollectMetrics",
+      "type": "bool",
+      "default": 'true'
     },
     {
-        "name": "EditorComments",
-        "type": "bool",
-        "default": "false"
+      "name": "EditorComments",
+      "type": "bool",
+      "default": "false"
     },
     {
-        "name": "UIState",
-        "type": "object",
-        "typename": "UIState",
-        "default": "null"
+      "name": "ForkButton",
+      "type": "bool",
+      "default": "false"
     },
-	{
-		"name": "HideTeamExplorerWelcomeMessage",
-		"type": "bool",
-		"default": "false"
-	}
-    ]
+    {
+      "name": "UIState",
+      "type": "object",
+      "typename": "UIState",
+      "default": "null"
+    },
+    {
+      "name": "HideTeamExplorerWelcomeMessage",
+      "type": "bool",
+      "default": "false"
+    },
+    {
+      "name": "EnableTraceLogging",
+      "type": "bool",
+      "default": "false"
+    }
+  ]
 }
 */
 
@@ -50,6 +60,13 @@ namespace GitHub.VisualStudio.Settings {
             set { editorComments  = value; this.RaisePropertyChange(); }
         }
 
+        bool forkButton;
+        public bool ForkButton
+        {
+            get { return forkButton; }
+            set { forkButton  = value; this.RaisePropertyChange(); }
+        }
+
         UIState uIState;
         public UIState UIState
         {
@@ -64,21 +81,32 @@ namespace GitHub.VisualStudio.Settings {
             set { hideTeamExplorerWelcomeMessage  = value; this.RaisePropertyChange(); }
         }
 
+        bool enableTraceLogging;
+        public bool EnableTraceLogging
+        {
+            get { return enableTraceLogging; }
+            set { enableTraceLogging  = value; this.RaisePropertyChange(); }
+        }
+
 
         void LoadSettings()
         {
             CollectMetrics = (bool)settingsStore.Read("CollectMetrics", true);
             EditorComments = (bool)settingsStore.Read("EditorComments", false);
+            ForkButton = (bool)settingsStore.Read("ForkButton", false);
             UIState = SimpleJson.DeserializeObject<UIState>((string)settingsStore.Read("UIState", "{}"));
             HideTeamExplorerWelcomeMessage = (bool)settingsStore.Read("HideTeamExplorerWelcomeMessage", false);
+            EnableTraceLogging = (bool)settingsStore.Read("EnableTraceLogging", false);
         }
 
         void SaveSettings()
         {
             settingsStore.Write("CollectMetrics", CollectMetrics);
             settingsStore.Write("EditorComments", EditorComments);
+            settingsStore.Write("ForkButton", ForkButton);
             settingsStore.Write("UIState", SimpleJson.SerializeObject(UIState));
             settingsStore.Write("HideTeamExplorerWelcomeMessage", HideTeamExplorerWelcomeMessage);
+            settingsStore.Write("EnableTraceLogging", EnableTraceLogging);
         }
 
     }

@@ -38,7 +38,10 @@ namespace GitHub.Services
         /// <returns>Returns a <see cref="UriString"/> representing the uri of the remote normalized to a GitHub repository url or null if none found.</returns>
         public UriString GetUri(string path, string remote = "origin")
         {
-            return GetUri(GetRepository(path), remote);
+            using (var repo = GetRepository(path))
+            {
+                return GetUri(repo, remote);
+            }
         }
 
         /// <summary>
@@ -71,7 +74,13 @@ namespace GitHub.Services
                 ?.Url;
         }
 
-        public static IGitService GitServiceHelper => VisualStudio.Services.DefaultExportProvider.GetExportedValueOrDefault<IGitService>() ?? new GitService();
+        /// <summary>
+        /// Get a new instance of <see cref="GitService"/>. 
+        /// </summary>
+        /// <remarks>
+        /// This is equivalent to creating it via MEF with <see cref="CreationPolicy.NonShared"/>
+        /// </remarks>
+        public static IGitService GitServiceHelper => new GitService();
 
         /// <summary>
         /// Finds the latest pushed commit of a file and returns the sha of that commit. Returns null when no commits have 
@@ -82,29 +91,31 @@ namespace GitHub.Services
         public Task<string> GetLatestPushedSha(string path)
         {
             Guard.ArgumentNotNull(path, nameof(path));
-            var repo = GetRepository(path);
-
-            if (repo == null)
-                return null;
-
-            if (repo.Head.IsTracking && repo.Head.Tip.Sha == repo.Head.TrackedBranch.Tip.Sha)
-            {
-                return Task.FromResult(repo.Head.Tip.Sha);
-            }
 
             return Task.Factory.StartNew(() =>
-             {
-                 var remoteHeads = repo.Refs.Where(r => r.IsRemoteTrackingBranch).ToList();
+            {
+                using (var repo = GetRepository(path))
+                {
+                    if (repo != null)
+                    {
+                        if (repo.Head.IsTracking && repo.Head.Tip.Sha == repo.Head.TrackedBranch.Tip.Sha)
+                        {
+                            return repo.Head.Tip.Sha;
+                        }
 
-                 foreach (var c in repo.Commits)
-                 {
-                     if (repo.Refs.ReachableFrom(remoteHeads, new[] { c }).Any())
-                     {
-                         return c.Sha;
-                     }
-                 }
-                 return null;
-             });
+                        var remoteHeads = repo.Refs.Where(r => r.IsRemoteTrackingBranch).ToList();
+                        foreach (var c in repo.Commits)
+                        {
+                            if (repo.Refs.ReachableFrom(remoteHeads, new[] { c }).Any())
+                            {
+                                return c.Sha;
+                            }
+                        }
+                    }
+
+                    return null;
+                }
+            });
         }
     }
 }

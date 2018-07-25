@@ -2,9 +2,7 @@
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using System.Threading.Tasks;
-using GitHub.Api;
 using GitHub.Extensions;
 using GitHub.Models;
 using GitHub.Services;
@@ -17,7 +15,6 @@ namespace GitHub.InlineReviews.ViewModels
     /// </summary>
     public class NewInlineCommentThreadViewModel : CommentThreadViewModel
     {
-        readonly Subject<Unit> finished = new Subject<Unit>();
         bool needsPush;
 
         /// <summary>
@@ -48,7 +45,15 @@ namespace GitHub.InlineReviews.ViewModels
                 this.WhenAnyValue(x => x.NeedsPush, x => !x),
                 DoPostComment);
 
-            var placeholder = CommentViewModel.CreatePlaceholder(this, CurrentUser);
+            EditComment = ReactiveCommand.CreateAsyncTask<Unit>(
+                Observable.Return(false),
+                o => null);
+
+            DeleteComment = ReactiveCommand.CreateAsyncTask<Unit>(
+                Observable.Return(false),
+                o => null);
+
+            var placeholder = PullRequestReviewCommentViewModel.CreatePlaceholder(session, this, CurrentUser);
             placeholder.BeginEdit.Execute(null);
             this.WhenAnyValue(x => x.NeedsPush).Subscribe(x => placeholder.IsReadOnly = x);
             Comments.Add(placeholder);
@@ -77,12 +82,6 @@ namespace GitHub.InlineReviews.ViewModels
         public IPullRequestSession Session { get; }
 
         /// <summary>
-        /// Gets an observable that is fired with a single value when a comment is sucessfully
-        /// posted and therefore this is no loner a new comment thread.
-        /// </summary>
-        public IObservable<Unit> Finished => finished;
-
-        /// <summary>
         /// Gets a value indicating whether the user must commit and push their changes before
         /// leaving a comment on the requested line.
         /// </summary>
@@ -92,13 +91,7 @@ namespace GitHub.InlineReviews.ViewModels
             private set { this.RaiseAndSetIfChanged(ref needsPush, value); }
         }
 
-        /// <inheritdoc/>
-        public override Uri GetCommentUrl(int id)
-        {
-            throw new NotSupportedException("Cannot navigate to a non-posted comment.");
-        }
-
-        async Task<ICommentModel> DoPostComment(object parameter)
+        async Task DoPostComment(object parameter)
         {
             Guard.ArgumentNotNull(parameter, nameof(parameter));
 
@@ -116,14 +109,12 @@ namespace GitHub.InlineReviews.ViewModels
             }
 
             var body = (string)parameter;
-            var model = await Session.PostReviewComment(
+            await Session.PostReviewComment(
                 body,
                 File.CommitSha,
                 File.RelativePath.Replace("\\", "/"),
+                File.Diff,
                 diffPosition.DiffLineNumber);
-
-            finished.OnNext(Unit.Default);
-            return model;
         }
     }
 }

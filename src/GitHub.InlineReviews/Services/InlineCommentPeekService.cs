@@ -26,19 +26,16 @@ namespace GitHub.InlineReviews.Services
     [Export(typeof(IInlineCommentPeekService))]
     class InlineCommentPeekService : IInlineCommentPeekService
     {
-        readonly IApiClientFactory apiClientFactory;
         readonly IOutliningManagerService outliningService;
         readonly IPeekBroker peekBroker;
         readonly IUsageTracker usageTracker;
 
         [ImportingConstructor]
         public InlineCommentPeekService(
-            IApiClientFactory apiClientFactory,
             IOutliningManagerService outliningManager,
             IPeekBroker peekBroker,
             IUsageTracker usageTracker)
         {
-            this.apiClientFactory = apiClientFactory;
             this.outliningService = outliningManager;
             this.peekBroker = peekBroker;
             this.usageTracker = usageTracker;
@@ -110,12 +107,7 @@ namespace GitHub.InlineReviews.Services
 
             var session = peekBroker.TriggerPeekSession(options);
             var item = session.PeekableItems.OfType<InlineCommentPeekableItem>().FirstOrDefault();
-
-            if (item != null)
-            {
-                var placeholder = item.ViewModel.Thread.Comments.Last();
-                placeholder.CancelEdit.Take(1).Subscribe(_ => session.Dismiss());
-            }
+            item?.ViewModel.Close.Take(1).Subscribe(_ => session.Dismiss());
 
             return trackingPoint;
         }
@@ -137,7 +129,9 @@ namespace GitHub.InlineReviews.Services
 
             ExpandCollapsedRegions(textView, line.Extent);
 
-            peekBroker.TriggerPeekSession(options);
+            var session = peekBroker.TriggerPeekSession(options);
+            var item = session.PeekableItems.OfType<InlineCommentPeekableItem>().FirstOrDefault();
+            item?.ViewModel.Close.Take(1).Subscribe(_ => session.Dismiss());
 
             return trackingPoint;
         }
@@ -160,7 +154,7 @@ namespace GitHub.InlineReviews.Services
             ExpandCollapsedRegions(textView, line.Extent);
             peekBroker.TriggerPeekSession(textView, trackingPoint, InlineCommentPeekRelationship.Instance.Name);
 
-            usageTracker.IncrementPRReviewDiffViewInlineCommentOpen().Forget();
+            usageTracker.IncrementCounter(x => x.NumberOfPRReviewDiffViewInlineCommentOpen).Forget();
 
             return Tuple.Create(line, trackingPoint);
         }

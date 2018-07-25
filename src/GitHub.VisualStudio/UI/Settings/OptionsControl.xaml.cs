@@ -19,15 +19,27 @@ namespace GitHub.VisualStudio.UI
             set { chkMetrics.IsChecked = value; }
         }
 
+        public bool EnableTraceLogging
+        {
+            get { return chkEnableTraceLogging.IsChecked ?? false; }
+            set { chkEnableTraceLogging.IsChecked = value; }
+        }
+
         public bool EditorComments
         {
             get { return chkEditorComments.IsChecked ?? false; }
             set { chkEditorComments.IsChecked = value; }
         }
 
+        public bool ForkButton
+        {
+            get { return chkForkButton.IsChecked ?? false; }
+            set { chkForkButton.IsChecked = value; }
+        }
+
         private void Hyperlink_RequestNavigate(object sender, System.Windows.Navigation.RequestNavigateEventArgs e)
         {
-            var browser = Services.DefaultExportProvider.GetExportedValue<IVisualStudioBrowser>();
+            var browser = VisualStudio.Services.DefaultExportProvider.GetExportedValue<IVisualStudioBrowser>();
             browser?.OpenUrl(e.Uri);
         }
     }

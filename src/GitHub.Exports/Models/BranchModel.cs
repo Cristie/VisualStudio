@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Globalization;
+using GitHub.Services;
 
 namespace GitHub.Models
 {
@@ -25,14 +26,17 @@ namespace GitHub.Models
             Id = String.Format(CultureInfo.InvariantCulture, "{0}/{1}", Repository.Owner, Name);
         }
 
-        public BranchModel(LibGit2Sharp.Branch branch, IRepositoryModel repo)
+        public BranchModel(LibGit2Sharp.Branch branch, IRepositoryModel repo, IGitService gitService)
         {
             Extensions.Guard.ArgumentNotNull(branch, nameof(branch));
             Extensions.Guard.ArgumentNotNull(repo, nameof(repo));
-
             Name = DisplayName = branch.FriendlyName;
-            Repository = branch.IsRemote ? new LocalRepositoryModel(branch.Remote.Url) : repo;
+#pragma warning disable 0618 // TODO: Replace `Branch.Remote` with `Repository.Network.Remotes[branch.RemoteName]`.
+            Repository = branch.IsRemote ? new LocalRepositoryModel(branch.Remote.Url, gitService) : repo;
+#pragma warning restore 0618
             IsTracking = branch.IsTracking;
+            Sha = branch.Tip?.Sha;
+            TrackedSha = branch.TrackedBranch?.Tip?.Sha;
             Id = String.Format(CultureInfo.InvariantCulture, "{0}/{1}", Repository.Owner, Name);
         }
 
@@ -41,7 +45,8 @@ namespace GitHub.Models
         public IRepositoryModel Repository { get; private set; }
         public bool IsTracking { get; private set; }
         public string DisplayName { get; set; }
-
+        public string Sha { get; private set; }
+        public string TrackedSha { get; private set; }
 
         #region Equality things
         public void CopyFrom(IBranch other)

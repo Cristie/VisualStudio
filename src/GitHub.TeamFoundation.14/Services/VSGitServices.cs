@@ -1,19 +1,31 @@
-﻿using System;
+﻿#if TEAMEXPLORER15
+// Microsoft.VisualStudio.Shell.Framework has an alias to avoid conflict with IAsyncServiceProvider
+extern alias SF15;
+using ServiceProgressData = SF15::Microsoft.VisualStudio.Shell.ServiceProgressData;
+#endif
+
+using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.ComponentModel.Composition;
 using System.Globalization;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using GitHub.Extensions;
+using GitHub.Logging;
 using GitHub.Models;
 using GitHub.TeamFoundation;
 using GitHub.VisualStudio;
+#if TEAMEXPLORER14
 using Microsoft.TeamFoundation.Git.Controls.Extensibility;
-using Microsoft.VisualStudio.Shell.Interop;
-using Microsoft.VisualStudio.TeamFoundation.Git.Extensibility;
 using ReactiveUI;
+#else
+using Microsoft.VisualStudio.Shell.Interop;
+using System.Threading;
+#endif
+using Microsoft.VisualStudio.TeamFoundation.Git.Extensibility;
+using Serilog;
 
 namespace GitHub.Services
 {
@@ -21,25 +33,27 @@ namespace GitHub.Services
     [PartCreationPolicy(CreationPolicy.Shared)]
     public class VSGitServices : IVSGitServices
     {
+        static readonly ILogger log = LogManager.ForContext<VSGitServices>();
+
         readonly IGitHubServiceProvider serviceProvider;
-        readonly IVsStatusbar statusBar;
+
+        [SuppressMessage("Microsoft.Performance", "CA1823:AvoidUnusedPrivateFields", Justification = "Used in VS2017")]
+        readonly Lazy<IStatusBarNotificationService> statusBar;
 
         /// <summary>
         /// This MEF export requires specific versions of TeamFoundation. IGitExt is declared here so
         /// that instances of this type cannot be created if the TeamFoundation dlls are not available
         /// (otherwise we'll have multiple instances of IVSServices exports, and that would be Bad(tm))
         /// </summary>
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Performance", "CA1823:AvoidUnusedPrivateFields")]
+        [SuppressMessage("Microsoft.Performance", "CA1823:AvoidUnusedPrivateFields")]
         IGitExt gitExtService;
 
         [ImportingConstructor]
-        public VSGitServices(IGitHubServiceProvider serviceProvider)
+        public VSGitServices(IGitHubServiceProvider serviceProvider, Lazy<IStatusBarNotificationService> statusBar)
         {
             this.serviceProvider = serviceProvider;
-            this.statusBar = serviceProvider.GetService<IVsStatusbar>();
+            this.statusBar = statusBar;
         }
-
-        public event EventHandler ActiveRepoChanged;
 
         // The Default Repository Path that VS uses is hidden in an internal
         // service 'ISccSettingsService' registered in an internal service
@@ -55,7 +69,7 @@ namespace GitHub.Services
             }
             catch (Exception ex)
             {
-                VsOutputLogger.WriteLine(string.Format(CultureInfo.CurrentCulture, "Error loading the default cloning path from the registry '{0}'", ex));
+                log.Error(ex, "Error loading the default cloning path from the registry");
             }
             return ret;
         }
@@ -76,12 +90,11 @@ namespace GitHub.Services
             await gitExt.WhenAnyValue(x => x.CanClone).Where(x => x).Take(1);
 #else
             var gitExt = serviceProvider.GetService<IGitActionsExt>();
-            var typedProgress = ((Progress<Microsoft.VisualStudio.Shell.ServiceProgressData>)progress) ??
-                new Progress<Microsoft.VisualStudio.Shell.ServiceProgressData>();
+            var typedProgress = ((Progress<ServiceProgressData>)progress) ?? new Progress<ServiceProgressData>();
 
             await Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
             {
-                typedProgress.ProgressChanged += (s, e) => statusBar.SetText(e.ProgressText);
+                typedProgress.ProgressChanged += (s, e) => statusBar.Value.ShowMessage(e.ProgressText);
                 await gitExt.CloneAsync(cloneUrl, clonePath, recurseSubmodules, default(CancellationToken), typedProgress);
             });
 #endif
@@ -108,7 +121,12 @@ namespace GitHub.Services
             if (repo != null)
                 ret = repo.RepositoryPath;
             if (ret == null)
-                ret = serviceProvider.GetSolution().GetRepositoryFromSolution()?.Info?.Path;
+            {
+                using (var repository = serviceProvider.GetSolution().GetRepositoryFromSolution())
+                {
+                    ret = repository?.Info?.Path;
+                }
+            }
             return ret ?? String.Empty;
         }
 
@@ -120,7 +138,7 @@ namespace GitHub.Services
             }
             catch (Exception ex)
             {
-                VsOutputLogger.WriteLine(string.Format(CultureInfo.CurrentCulture, "Error loading the repository list from the registry '{0}'", ex));
+                log.Error(ex, "Error loading the repository list from the registry");
                 return Enumerable.Empty<ILocalRepositoryModel>();
             }
         }

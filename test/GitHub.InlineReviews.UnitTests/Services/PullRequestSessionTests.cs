@@ -1,68 +1,241 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using System.Threading.Tasks;
+using GitHub.Api;
 using GitHub.Extensions;
+using GitHub.Factories;
 using GitHub.InlineReviews.Services;
 using GitHub.InlineReviews.UnitTests.TestDoubles;
 using GitHub.Models;
 using GitHub.Primitives;
-using LibGit2Sharp;
+using GitHub.Services;
 using NSubstitute;
-using Xunit;
+using NUnit.Framework;
 
 namespace GitHub.InlineReviews.UnitTests.Services
 {
     public class PullRequestSessionTests
     {
         const int PullRequestNumber = 5;
+        const string PullRequestNodeId = "pull_request_id";
         const string RepoUrl = "https://foo.bar/owner/repo";
         const string FilePath = "test.cs";
 
-        public class TheGetFileMethod
+        public class TheHasPendingReviewProperty
         {
-            [Fact]
-            public async Task MatchesReviewCommentOnOriginalLine()
+            [Test]
+            public void IsFalseWithNoPendingReview()
             {
-                var baseContents = @"Line 1
-Line 2
-Line 3
-Line 4";
-                var headContents = @"Line 1
-Line 2
-Line 3 with comment
-Line 4";
+                var target = new PullRequestSession(
+                    CreateRealSessionService(),
+                    CreateActor(),
+                    CreatePullRequest(),
+                    Substitute.For<ILocalRepositoryModel>(),
+                    "owner",
+                    true);
 
-                var comment = CreateComment(@"@@ -1,4 +1,4 @@
- Line 1
- Line 2
--Line 3
-+Line 3 with comment");
-
-                using (var diffService = new FakeDiffService())
-                {
-                    var pullRequest = CreatePullRequest(comment);
-                    var service = CreateService(diffService);
-
-                    diffService.AddFile(FilePath, baseContents);
-
-                    var target = new PullRequestSession(
-                        service,
-                        Substitute.For<IAccount>(),
-                        pullRequest,
-                        Substitute.For<ILocalRepositoryModel>(),
-                        "owner",
-                        true);
-
-                    var editor = new FakeEditorContentSource(headContents);
-                    var file = await target.GetFile(FilePath, editor);
-                    var thread = file.InlineCommentThreads.First();
-                    Assert.Equal(2, thread.LineNumber);
-                }
+                Assert.That(target.HasPendingReview, Is.False);
             }
 
-            [Fact]
-            public async Task MatchesReviewCommentOnOriginalLineGettingContentFromDisk()
+            [Test]
+            public void IsFalseWithPendingReviewForOtherUser()
+            {
+                var currentUser = CreateActor("grokys");
+                var otherUser = CreateActor("shana");
+                var review = CreateReview(author: otherUser, state: PullRequestReviewState.Pending);
+                var pr = CreatePullRequest(review);
+
+                var target = new PullRequestSession(
+                    CreateRealSessionService(),
+                    currentUser,
+                    pr,
+                    Substitute.For<ILocalRepositoryModel>(),
+                    "owner",
+                    true);
+
+                Assert.That(target.HasPendingReview, Is.False);
+            }
+
+            [Test]
+            public void IsFalseWithNonPendingReviewForCurrentUser()
+            {
+                var currentUser = CreateActor("grokys");
+                var review = CreateReview(author: currentUser, state: PullRequestReviewState.Approved);
+                var pr = CreatePullRequest(review);
+
+                var target = new PullRequestSession(
+                    CreateRealSessionService(),
+                    currentUser,
+                    pr,
+                    Substitute.For<ILocalRepositoryModel>(),
+                    "owner",
+                    true);
+
+                Assert.That(target.HasPendingReview, Is.False);
+            }
+
+            [Test]
+            public void IsTrueWithPendingReviewForCurrentUser()
+            {
+                var currentUser = CreateActor();
+                var review = CreateReview(author: currentUser, state: PullRequestReviewState.Pending);
+                var pr = CreatePullRequest(review);
+
+                var target = new PullRequestSession(
+                    CreateRealSessionService(),
+                    currentUser,
+                    pr,
+                    Substitute.For<ILocalRepositoryModel>(),
+                    "owner",
+                    true);
+
+                Assert.That(target.HasPendingReview, Is.True);
+            }
+
+            [Test]
+            public async Task IsTrueWhenRefreshedWithPendingReview()
+            {
+                var sessionService = CreateMockSessionService();
+                var currentUser = CreateActor("grokys");
+                var target = new PullRequestSession(
+                    sessionService,
+                    currentUser,
+                    CreatePullRequest(),
+                    CreateLocalRepository(),
+                    "owner",
+                    true);
+
+                Assert.That(target.HasPendingReview, Is.False);
+
+                var review = CreateReview(author: currentUser, state: PullRequestReviewState.Pending);
+                UpdateReadPullRequest(sessionService, CreatePullRequest(review));
+                await target.Refresh();
+
+                Assert.That(target.HasPendingReview, Is.True);
+            }
+
+            [Test]
+            public async Task IsTrueWhenStartReviewCalled()
+            {
+                var currentUser = CreateActor();
+                var service = Substitute.For<IPullRequestSessionService>();
+                var review = CreateReview(author: currentUser, state: PullRequestReviewState.Pending);
+                service.CreatePendingReview(null, null).ReturnsForAnyArgs(CreatePullRequest(review));
+
+                var target = new PullRequestSession(
+                    service,
+                    currentUser,
+                    CreatePullRequest(),
+                    CreateLocalRepository(),
+                    "owner",
+                    true);
+
+                Assert.That(target.HasPendingReview, Is.False);
+
+                await target.StartReview();
+
+                Assert.That(target.HasPendingReview, Is.True);
+            }
+
+            [Test]
+            public async Task IsFalseWhenReviewCancelled()
+            {
+                var currentUser = CreateActor();
+                var review = CreateReview(author: currentUser, state: PullRequestReviewState.Pending);
+                var pr = CreatePullRequest(review);
+
+                var target = new PullRequestSession(
+                    Substitute.For<IPullRequestSessionService>(),
+                    currentUser,
+                    pr,
+                    Substitute.For<ILocalRepositoryModel>(),
+                    "owner",
+                    true);
+
+                Assert.That(target.HasPendingReview, Is.True);
+
+                await target.CancelReview();
+
+                Assert.That(target.HasPendingReview, Is.False);
+            }
+        }
+
+        public class TheGetFileMethod
+        {
+            [Test]
+            public async Task BaseShaIsSet()
+            {
+                var target = new PullRequestSession(
+                    CreateRealSessionService(),
+                    CreateActor(),
+                    CreatePullRequest(),
+                    Substitute.For<ILocalRepositoryModel>(),
+                    "owner",
+                    true);
+                var file = await target.GetFile(FilePath);
+
+                Assert.That("BASE_SHA", Is.SameAs(file.BaseSha));
+            }
+
+            [Test]
+            public async Task HeadCommitShaIsSet()
+            {
+                var target = new PullRequestSession(
+                    CreateRealSessionService(),
+                    CreateActor(),
+                    CreatePullRequest(),
+                    Substitute.For<ILocalRepositoryModel>(),
+                    "owner",
+                    true);
+                var file = await target.GetFile(FilePath);
+
+                Assert.That("HEAD_SHA", Is.SameAs(file.CommitSha));
+                Assert.That(file.IsTrackingHead, Is.True);
+            }
+
+            [Test]
+            public async Task PinnedCommitShaIsSet()
+            {
+                var target = new PullRequestSession(
+                    CreateRealSessionService(),
+                    CreateActor(),
+                    CreatePullRequest(),
+                    Substitute.For<ILocalRepositoryModel>(),
+                    "owner",
+                    true);
+                var file = await target.GetFile(FilePath, "123");
+
+                Assert.That("123", Is.SameAs(file.CommitSha));
+                Assert.That(file.IsTrackingHead, Is.False);
+            }
+
+            [Test]
+            public async Task DiffShaIsSet()
+            {
+                var diff = new List<DiffChunk>();
+                var sessionService = CreateRealSessionService();
+
+                sessionService.Diff(
+                    Arg.Any<ILocalRepositoryModel>(),
+                    "MERGE_BASE",
+                    "HEAD_SHA",
+                    FilePath).Returns(diff);
+
+                var target = new PullRequestSession(
+                    sessionService,
+                    CreateActor(),
+                    CreatePullRequest(),
+                    Substitute.For<ILocalRepositoryModel>(),
+                    "owner",
+                    true);
+                var file = await target.GetFile(FilePath);
+
+                Assert.That(diff, Is.SameAs(file.Diff));
+            }
+
+            [Test]
+            public async Task InlineCommentThreadsIsSet()
             {
                 var baseContents = @"Line 1
 Line 2
@@ -73,7 +246,7 @@ Line 2
 Line 3 with comment
 Line 4";
 
-                var comment = CreateComment(@"@@ -1,4 +1,4 @@
+                var thread = CreateThread(@"@@ -1,4 +1,4 @@
  Line 1
  Line 2
 -Line 3
@@ -81,512 +254,301 @@ Line 4";
 
                 using (var diffService = new FakeDiffService())
                 {
-                    var pullRequest = CreatePullRequest(comment);
-                    var service = CreateService(diffService);
+                    var pullRequest = CreatePullRequest(thread);
+                    var service = CreateRealSessionService(diffService);
 
-                    diffService.AddFile(FilePath, baseContents);
-                    service.ReadFileAsync(FilePath).Returns(Encoding.UTF8.GetBytes(headContents));
+                    diffService.AddFile(FilePath, baseContents, "MERGE_BASE");
+                    diffService.AddFile(FilePath, headContents, "HEAD_SHA");
 
                     var target = new PullRequestSession(
                         service,
-                        Substitute.For<IAccount>(),
+                        CreateActor(),
                         pullRequest,
                         Substitute.For<ILocalRepositoryModel>(),
                         "owner",
                         true);
 
                     var file = await target.GetFile(FilePath);
-                    var thread = file.InlineCommentThreads.First();
-
-                    Assert.Equal(2, thread.LineNumber);
+                    var inlineThread = file.InlineCommentThreads.First();
+                    Assert.That(2, Is.EqualTo(inlineThread.LineNumber));
                 }
             }
 
-            [Fact]
-            public async Task MatchesReviewCommentOnDifferentLine()
+            [Test]
+            public async Task SameNonHeadCommitShasReturnSameFiles()
             {
-                var baseContents = @"Line 1
-Line 2
-Line 3
-Line 4";
-                var headContents = @"New Line 1
-New Line 2
-Line 1
-Line 2
-Line 3 with comment
-Line 4";
+                var target = new PullRequestSession(
+                    CreateRealSessionService(),
+                    CreateActor(),
+                    CreatePullRequest(),
+                    Substitute.For<ILocalRepositoryModel>(),
+                    "owner",
+                    true);
+                var file1 = await target.GetFile(FilePath, "123");
+                var file2 = await target.GetFile(FilePath, "123");
 
-                var comment = CreateComment(@"@@ -1,4 +1,4 @@
- Line 1
- Line 2
--Line 3
-+Line 3 with comment");
-
-
-                using (var diffService = new FakeDiffService())
-                {
-                    var pullRequest = CreatePullRequest(comment);
-                    var service = CreateService(diffService);
-
-                    diffService.AddFile(FilePath, baseContents);
-
-                    var target = new PullRequestSession(
-                        service,
-                        Substitute.For<IAccount>(),
-                        pullRequest,
-                        Substitute.For<ILocalRepositoryModel>(),
-                        "owner",
-                        true);
-
-                    var editor = new FakeEditorContentSource(headContents);
-                    var file = await target.GetFile(FilePath, editor);
-                    var thread = file.InlineCommentThreads.First();
-
-                    Assert.Equal(4, thread.LineNumber);
-                }
+                Assert.That(file1, Is.SameAs(file2));
             }
 
-            [Fact]
-            public async Task UpdatesReviewCommentWithEditorContents()
+            [Test]
+            public async Task DifferentCommitShasReturnDifferentFiles()
             {
-                var baseContents = @"Line 1
-Line 2
-Line 3
-Line 4";
-                var diskContents = @"Line 1
-Line 2
-Line 3 with comment
-Line 4";
-                var editorContents = @"New Line 1
-New Line 2
-Line 1
-Line 2
-Line 3 with comment
-Line 4";
+                var target = new PullRequestSession(
+                    CreateRealSessionService(),
+                    CreateActor(),
+                    CreatePullRequest(),
+                    Substitute.For<ILocalRepositoryModel>(),
+                    "owner",
+                    true);
+                var file1 = await target.GetFile(FilePath, "123");
+                var file2 = await target.GetFile(FilePath, "456");
 
-                var comment = CreateComment(@"@@ -1,4 +1,4 @@
- Line 1
- Line 2
--Line 3
-+Line 3 with comment");
-
-                using (var diffService = new FakeDiffService())
-                {
-                    var pullRequest = CreatePullRequest(comment);
-                    var service = CreateService(diffService);
-
-                    diffService.AddFile(FilePath, baseContents);
-
-                    var target = new PullRequestSession(
-                        service,
-                        Substitute.For<IAccount>(),
-                        pullRequest,
-                        Substitute.For<ILocalRepositoryModel>(),
-                        "owner",
-                        true);
-
-                    var editor = new FakeEditorContentSource(diskContents);
-                    var file = await target.GetFile(FilePath, editor);
-                    var thread = file.InlineCommentThreads.First();
-
-                    Assert.Equal(2, thread.LineNumber);
-                    editor.SetContent(editorContents);
-
-                    await target.UpdateEditorContent(FilePath);
-
-                    Assert.Equal(4, thread.LineNumber);
-                }
+                Assert.That(file1, Is.Not.SameAs(file2));
             }
+        }
 
-            [Fact]
-            public async Task UpdatesReviewCommentWithContentsFromGitWhenBranchNotCheckedOut()
+        public class TheCancelReviewMethod
+        {
+            [Test]
+            public void ThrowsWithNoPendingReview()
             {
-                var baseContents = @"Line 1
-Line 2
-Line 3
-Line 4";
-                var gitContents = Encoding.UTF8.GetBytes(@"Line 1
-Line 2
-Line 3 with comment
-Line 4");
-                var editorContents = @"Editor content";
+                var target = new PullRequestSession(
+                    CreateRealSessionService(),
+                    CreateActor(),
+                    CreatePullRequest(),
+                    Substitute.For<ILocalRepositoryModel>(),
+                    "owner",
+                    true);
 
-                var comment = CreateComment(@"@@ -1,4 +1,4 @@
- Line 1
- Line 2
--Line 3
-+Line 3 with comment");
-
-                using (var diffService = new FakeDiffService())
-                {
-                    var pullRequest = CreatePullRequest(comment);
-                    var service = CreateService(diffService);
-
-                    diffService.AddFile(FilePath, baseContents);
-
-                    // Because the PR branch isn't checked out, the file contents should be read
-                    // from git and not the editor or disk.
-                    service.ExtractFileFromGit(Arg.Any<ILocalRepositoryModel>(), PullRequestNumber, "HEAD_SHA", FilePath)
-                        .Returns(Task.FromResult(gitContents));
-
-                    var target = new PullRequestSession(
-                        service,
-                        Substitute.For<IAccount>(),
-                        pullRequest,
-                        Substitute.For<ILocalRepositoryModel>(),
-                        "owner",
-                        isCheckedOut: false);
-
-                    var editor = new FakeEditorContentSource(editorContents);
-                    var file = await target.GetFile(FilePath, editor);
-                    var thread = file.InlineCommentThreads.First();
-
-                    Assert.Equal(2, thread.LineNumber);
-                }
+                Assert.ThrowsAsync<InvalidOperationException>(async () => await target.CancelReview());
             }
 
-            [Fact]
-            public async Task UpdatesReviewCommentWithNewBody()
+            [Test]
+            public async Task CallsServiceWithNodeId()
             {
-                var baseContents = @"Line 1
-Line 2
-Line 3
-Line 4";
-                var editorContents = @"Line 1
-Line 2
-Line 3 with comment
-Line 4";
+                var service = Substitute.For<IPullRequestSessionService>();
+                var target = CreateTargetWithPendingReview(service);
 
-                var originalComment = CreateComment(@"@@ -1,4 +1,4 @@
- Line 1
- Line 2
--Line 3
-+Line 3 with comment", "Original Comment");
+                await target.CancelReview();
 
-                var updatedComment = CreateComment(@"@@ -1,4 +1,4 @@
- Line 1
- Line 2
--Line 3
-+Line 3 with comment", "Updated Comment");
-
-
-                using (var diffService = new FakeDiffService())
-                {
-                    var pullRequest = CreatePullRequest(originalComment);
-                    var service = CreateService(diffService);
-
-                    diffService.AddFile(FilePath, baseContents);
-
-                    var target = new PullRequestSession(
-                        service,
-                        Substitute.For<IAccount>(),
-                        pullRequest,
-                        Substitute.For<ILocalRepositoryModel>(),
-                        "owner",
-                        true);
-
-                    var editor = new FakeEditorContentSource(editorContents);
-                    var file = await target.GetFile(FilePath, editor);
-
-                    var thread = file.InlineCommentThreads.Single();
-
-                    Assert.Equal("Original Comment", thread.Comments.Single().Body);
-                    Assert.Equal(2, thread.LineNumber);
-
-                    pullRequest = CreatePullRequest(updatedComment);
-                    await target.Update(pullRequest);
-                    thread = file.InlineCommentThreads.Single();
-
-                    Assert.Equal("Updated Comment", thread.Comments.Single().Body);
-                    Assert.Equal(2, thread.LineNumber);
-                }
+                await service.Received(1).CancelPendingReview(
+                    Arg.Any<ILocalRepositoryModel>(),
+                    "review1");
             }
 
-            [Fact]
-            public async Task AddsNewReviewCommentToThread()
+            [Test]
+            public async Task RemovesReviewFromModel()
             {
-                var baseContents = @"Line 1
-Line 2
-Line 3
-Line 4";
-                var editorContents = @"Line 1
-Line 2
-Line 3 with comment
-Line 4";
+                var service = Substitute.For<IPullRequestSessionService>();
+                var target = CreateTargetWithPendingReview(service);
 
-                var comment1 = CreateComment(@"@@ -1,4 +1,4 @@
- Line 1
- Line 2
--Line 3
-+Line 3 with comment", "Comment1");
+                await target.CancelReview();
 
-                var comment2 = CreateComment(@"@@ -1,4 +1,4 @@
- Line 1
- Line 2
--Line 3
-+Line 3 with comment", "Comment2");
-
-
-                using (var diffService = new FakeDiffService())
-                {
-                    var pullRequest = CreatePullRequest(comment1);
-                    var service = CreateService(diffService);
-
-                    diffService.AddFile(FilePath, baseContents);
-
-                    var target = new PullRequestSession(
-                        service,
-                        Substitute.For<IAccount>(),
-                        pullRequest,
-                        Substitute.For<ILocalRepositoryModel>(),
-                        "owner",
-                        true);
-
-                    var editor = new FakeEditorContentSource(editorContents);
-                    var file = await target.GetFile(FilePath, editor);
-
-                    var thread = file.InlineCommentThreads.Single();
-
-                    Assert.Equal("Comment1", thread.Comments.Single().Body);
-                    Assert.Equal(2, thread.LineNumber);
-
-                    pullRequest = CreatePullRequest(comment1, comment2);
-                    await target.Update(pullRequest);
-                    thread = file.InlineCommentThreads.Single();
-
-                    Assert.Equal(2, thread.Comments.Count);
-                    Assert.Equal(new[] { "Comment1", "Comment2" }, thread.Comments.Select(x => x.Body).ToArray());
-                    Assert.Equal(2, thread.LineNumber);
-                }
+                Assert.IsEmpty(target.PullRequest.Reviews);
             }
 
-            [Fact]
-            public async Task CommitShaIsSetIfUnmodified()
+            public static PullRequestSession CreateTargetWithPendingReview(
+                IPullRequestSessionService service)
             {
-                var baseContents = @"Line 1
-Line 2
-Line 3
-Line 4";
-                var headContents = @"Line 1
-Line 2
-Line 3 with comment
-Line 4";
+                var currentUser = CreateActor();
+                var review = CreateReview(
+                    author: currentUser,
+                    state: PullRequestReviewState.Pending,
+                    comments: CreateComment());
+                var pr = CreatePullRequest(review);
 
-                using (var diffService = new FakeDiffService())
-                {
-                    var pullRequest = CreatePullRequest();
-                    var service = CreateService(diffService);
-
-                    diffService.AddFile(FilePath, baseContents);
-                    service.IsUnmodifiedAndPushed(Arg.Any<ILocalRepositoryModel>(), FilePath, Arg.Any<byte[]>()).Returns(true);
-
-                    var target = new PullRequestSession(
-                        service,
-                        Substitute.For<IAccount>(),
-                        pullRequest,
-                        Substitute.For<ILocalRepositoryModel>(),
-                        "owner",
-                        true);
-
-                    var editor = new FakeEditorContentSource(headContents);
-                    var file = await target.GetFile(FilePath, editor);
-                    Assert.Equal("BRANCH_TIP", file.CommitSha);
-                }
+                return new PullRequestSession(
+                    service,
+                    currentUser,
+                    pr,
+                    Substitute.For<ILocalRepositoryModel>(),
+                    "owner",
+                    true);
             }
+        }
 
-            [Fact]
-            public async Task CommitShaIsNullIfModified()
+        public class ThePostReviewMethod
+        {
+            [Test]
+            public async Task PostsToCorrectForkWithNoPendingReview()
             {
-                var baseContents = @"Line 1
-Line 2
-Line 3
-Line 4";
-                var headContents = @"Line 1
-Line 2
-Line 3 with comment
-Line 4";
+                var service = CreateMockSessionService();
+                var target = CreateTarget(service, "fork", "owner", false);
 
+                service.PostReview(null, null, null, null, 0).ReturnsForAnyArgs(CreatePullRequest());
+                await target.PostReview("New Review", Octokit.PullRequestReviewEvent.Approve);
 
-                using (var diffService = new FakeDiffService())
-                {
-                    var pullRequest = CreatePullRequest();
-                    var service = CreateService(diffService);
-
-                    diffService.AddFile(FilePath, baseContents);
-                    service.IsUnmodifiedAndPushed(Arg.Any<ILocalRepositoryModel>(), FilePath, Arg.Any<byte[]>()).Returns(false);
-
-                    var target = new PullRequestSession(
-                        service,
-                        Substitute.For<IAccount>(),
-                        pullRequest,
-                        Substitute.For<ILocalRepositoryModel>(),
-                        "owner",
-                        true);
-
-                    var editor = new FakeEditorContentSource(headContents);
-                    var file = await target.GetFile(FilePath, editor);
-                    Assert.Null(file.CommitSha);
-                }
+                await service.Received(1).PostReview(
+                    target.LocalRepository,
+                    "pr1",
+                    "HEAD_SHA",
+                    "New Review",
+                    Octokit.PullRequestReviewEvent.Approve);
             }
 
-            [Fact]
-            public async Task CommitShaIsNullWhenChangedToModified()
+            [Test]
+            public async Task PostsToCorrectForkWithPendingReview()
             {
-                var baseContents = @"Line 1
-Line 2
-Line 3
-Line 4";
-                var headContents = Encoding.UTF8.GetBytes(@"Line 1
-Line 2
-Line 3 with comment
-Line 4");
-                var editorContents = Encoding.UTF8.GetBytes(@"Line 1
-Line 2
-Line 3 with comment
-Line 4 with comment");
+                var service = CreateMockSessionService();
+                var target = CreateTarget(service, "fork", "owner", true);
 
-                using (var diffService = new FakeDiffService())
-                {
-                    var pullRequest = CreatePullRequest();
-                    var service = CreateService(diffService);
+                service.SubmitPendingReview(null, null, null, 0).ReturnsForAnyArgs(CreatePullRequest());
+                await target.PostReview("New Review", Octokit.PullRequestReviewEvent.RequestChanges);
 
-                    diffService.AddFile(FilePath, baseContents);
-                    service.IsUnmodifiedAndPushed(Arg.Any<ILocalRepositoryModel>(), FilePath, headContents).Returns(true);
-                    service.IsUnmodifiedAndPushed(Arg.Any<ILocalRepositoryModel>(), FilePath, editorContents).Returns(false);
-
-                    var target = new PullRequestSession(
-                        service,
-                        Substitute.For<IAccount>(),
-                        pullRequest,
-                        Substitute.For<ILocalRepositoryModel>(),
-                        "owner",
-                        true);
-
-                    var editor = new FakeEditorContentSource(headContents);
-                    var file = await target.GetFile(FilePath, editor);
-
-                    Assert.Equal("BRANCH_TIP", file.CommitSha);
-
-                    editor.SetContent(editorContents);
-                    await target.UpdateEditorContent(FilePath);
-
-                    Assert.Null(file.CommitSha);
-                }
+                await service.Received(1).SubmitPendingReview(
+                    target.LocalRepository,
+                    "pendingReviewId",
+                    "New Review",
+                    Octokit.PullRequestReviewEvent.RequestChanges);
             }
-
-            [Fact]
-            public async Task CommitShaIsReadFromPullRequestModelIfBranchNotCheckedOut()
-            {
-                var baseContents = @"Line 1
-Line 2
-Line 3
-Line 4";
-                var headContents = @"Line 1
-Line 2
-Line 3 with comment
-Line 4";
-
-                using (var diffService = new FakeDiffService())
-                {
-                    var pullRequest = CreatePullRequest();
-                    var service = CreateService(diffService);
-
-                    diffService.AddFile(FilePath, baseContents);
-                    service.IsUnmodifiedAndPushed(Arg.Any<ILocalRepositoryModel>(), FilePath, Arg.Any<byte[]>()).Returns(false);
-
-                    var target = new PullRequestSession(
-                        service,
-                        Substitute.For<IAccount>(),
-                        pullRequest,
-                        Substitute.For<ILocalRepositoryModel>(),
-                        "owner",
-                        isCheckedOut: false);
-
-                    var editor = new FakeEditorContentSource(headContents);
-                    var file = await target.GetFile(FilePath, editor);
-                    Assert.Equal("HEAD_SHA", file.CommitSha);
-                }
-            }
-
         }
 
         public class ThePostReviewCommentMethod
         {
-            [Fact]
-            public async Task PostsToCorrectFork()
+            [Test]
+            public async Task PostsToCorrectForkWithNoPendingReview()
             {
-                var service = Substitute.For<IPullRequestSessionService>();
-                var target = CreateTarget(service, "fork", "owner");
+                var service = CreateMockSessionService();
+                var target = CreateTarget(service, "fork", "owner", false);
 
-                await target.PostReviewComment("New Comment", "COMMIT_ID", "file.cs", 1);
+                service.PostStandaloneReviewComment(null, null, null, null, null, 0).ReturnsForAnyArgs(CreatePullRequest());
+                await target.PostReviewComment("New Comment", "COMMIT_ID", "file.cs", new DiffChunk[0], 1);
 
-                await service.Received(1).PostReviewComment(
-                    Arg.Any<ILocalRepositoryModel>(),
-                    "owner",
-                    Arg.Any<IAccount>(),
-                    PullRequestNumber,
+                await service.Received(1).PostStandaloneReviewComment(
+                    target.LocalRepository,
+                    "pr1",
                     "New Comment",
                     "COMMIT_ID",
                     "file.cs",
                     1);
             }
 
-            [Fact]
-            public async Task PostsReplyToCorrectFork()
+            [Test]
+            public async Task PostsReplyToCorrectForkWithNoPendingReview()
             {
-                var service = Substitute.For<IPullRequestSessionService>();
-                var target = CreateTarget(service, "fork", "owner");
+                var service = CreateMockSessionService();
+                var target = CreateTarget(service, "fork", "owner", false);
 
-                await target.PostReviewComment("New Comment", 1);
+                service.PostStandaloneReviewCommentReply(null, null, null, null).ReturnsForAnyArgs(CreatePullRequest());
+                await target.PostReviewComment("New Comment", "node1");
 
-                await service.Received(1).PostReviewComment(
-                    Arg.Any<ILocalRepositoryModel>(),
-                    "owner",
-                    Arg.Any<IAccount>(),
-                    PullRequestNumber,
+                await service.Received(1).PostStandaloneReviewCommentReply(
+                    target.LocalRepository,
+                    "pr1",
                     "New Comment",
+                    "node1");
+            }
+
+            [Test]
+            public async Task PostsToCorrectForkWithPendingReview()
+            {
+                var service = CreateMockSessionService();
+                var target = CreateTarget(service, "fork", "owner", true);
+
+                service.PostPendingReviewComment(null, null, null, null, null, 0).ReturnsForAnyArgs(CreatePullRequest());
+                await target.PostReviewComment("New Comment", "COMMIT_ID", "file.cs", new DiffChunk[0], 1);
+
+                await service.Received(1).PostPendingReviewComment(
+                    target.LocalRepository,
+                    "pendingReviewId",
+                    "New Comment",
+                    "COMMIT_ID",
+                    "file.cs",
                     1);
             }
 
-            [Fact]
-            public async Task UpdatesFileWithNewThread()
+            [Test]
+            public async Task PostsReplyToCorrectForkWithPendingReview()
             {
+                var service = CreateMockSessionService();
+                var target = CreateTarget(service, "fork", "owner", true);
+
+                service.PostPendingReviewCommentReply(null, null, null, null).ReturnsForAnyArgs(CreatePullRequest());
+                await target.PostReviewComment("New Comment", "node1");
+
+                await service.Received(1).PostPendingReviewCommentReply(
+                    target.LocalRepository,
+                    "pendingReviewId",
+                    "New Comment",
+                    "node1");
+            }
+        }
+
+        public class TheRefreshMethod
+        {
+            [Test]
+            public async Task UpdatesThePullRequestModel()
+            {
+                var sessionService = CreateMockSessionService();
+                var target = new PullRequestSession(
+                    sessionService,
+                    CreateActor(),
+                    CreatePullRequest(),
+                    CreateLocalRepository(),
+                    "owner",
+                    true);
+
+                var newPullRequest = CreatePullRequest();
+                UpdateReadPullRequest(sessionService, newPullRequest);
+                await target.Refresh();
+
+                Assert.That(newPullRequest, Is.SameAs(target.PullRequest));
+            }
+
+            [Test]
+            public async Task AddsNewReviewCommentToThreadOnHeadFile()
+            {
+                var baseContents = @"Line 1
+Line 2
+Line 3
+Line 4";
+                var headContents = @"Line 1
+Line 2
+Line 3 with comment
+Line 4";
+                var thread1 = CreateThread(@"@@ -1,4 +1,4 @@
+ Line 1
+ Line 2
+-Line 3
++Line 3 with comment", "Comment1");
+                var thread2 = CreateThread(@"@@ -1,4 +1,4 @@
+ Line 1
+ Line 2
+-Line 3
++Line 3 with comment", "Comment2");
+
                 using (var diffService = new FakeDiffService())
                 {
-                    var target = await CreateTarget(diffService);
-                    var file = await target.GetFile(FilePath);
+                    var pullRequest = CreatePullRequest(thread1);
+                    var service = CreateRealSessionService(diffService);
 
-                    Assert.Empty(file.InlineCommentThreads);
+                    diffService.AddFile(FilePath, baseContents, "MERGE_BASE");
+                    diffService.AddFile(FilePath, headContents, "HEAD_SHA");
 
-                    await target.PostReviewComment("New Comment", 0);
+                    var target = new PullRequestSession(
+                        service,
+                        CreateActor(),
+                        pullRequest,
+                        CreateLocalRepository(),
+                        "owner",
+                        true);
 
-                    Assert.Equal(1, file.InlineCommentThreads.Count);
-                    Assert.Equal(1, file.InlineCommentThreads[0].Comments.Count);
-                    Assert.Equal("New Comment", file.InlineCommentThreads[0].Comments[0].Body);
+                    var file = await target.GetFile(FilePath, "HEAD");
+
+                    Assert.That(file.InlineCommentThreads[0].Comments, Has.Count.EqualTo(1));
+                    Assert.That(file.InlineCommentThreads[0].LineNumber, Is.EqualTo(2));
+
+                    pullRequest = CreatePullRequest(thread1, thread2);
+                    UpdateReadPullRequest(service, pullRequest);
+                    await target.Refresh();
+
+                    Assert.That(file.InlineCommentThreads[0].Comments, Has.Count.EqualTo(2));
+                    Assert.That(file.InlineCommentThreads[0].LineNumber, Is.EqualTo(2));
                 }
             }
 
-            PullRequestSession CreateTarget(
-                IPullRequestSessionService service,
-                string localRepositoryOwner,
-                string remoteRepositoryOwner)
-            {
-                var repository = Substitute.For<ILocalRepositoryModel>();
-
-                repository.CloneUrl.Returns(new UriString($"https://github.com/{localRepositoryOwner}/reop"));
-                repository.Owner.Returns(localRepositoryOwner);
-                repository.Name.Returns("repo");
-
-                return new PullRequestSession(
-                    service,
-                    Substitute.For<IAccount>(),
-                    CreatePullRequest(),
-                    repository,
-                    remoteRepositoryOwner,
-                    true);
-            }
-
-            async Task<PullRequestSession> CreateTarget(FakeDiffService diffService)
+            [Test]
+            public async Task AddsNewReviewCommentToThreadNonHeadFile()
             {
                 var baseContents = @"Line 1
 Line 2
@@ -597,31 +559,51 @@ Line 2
 Line 3 with comment
 Line 4";
 
-                var pullRequest = CreatePullRequest();
-                var service = CreateService(diffService);
+                var comment1 = CreateThread(@"@@ -1,4 +1,4 @@
+ Line 1
+ Line 2
+-Line 3
++Line 3 with comment", "Comment1");
+                var comment2 = CreateThread(@"@@ -1,4 +1,4 @@
+ Line 1
+ Line 2
+-Line 3
++Line 3 with comment", "Comment2");
 
-                diffService.AddFile(FilePath, baseContents);
+                using (var diffService = new FakeDiffService())
+                {
+                    var pullRequest = CreatePullRequest(comment1);
+                    var service = CreateRealSessionService(diffService);
 
-                var target = new PullRequestSession(
-                    service,
-                    Substitute.For<IAccount>(),
-                    pullRequest,
-                    Substitute.For<ILocalRepositoryModel>(),
-                    "owner",
-                    true);
+                    diffService.AddFile(FilePath, baseContents, "MERGE_BASE");
+                    diffService.AddFile(FilePath, headContents, "123");
 
-                var editor = new FakeEditorContentSource(headContents);
-                var file = await target.GetFile(FilePath, editor);
-                return target;
+                    var target = new PullRequestSession(
+                        service,
+                        CreateActor(),
+                        pullRequest,
+                        CreateLocalRepository(),
+                        "owner",
+                        true);
+
+                    var file = await target.GetFile(FilePath, "123");
+
+                    Assert.That(file.InlineCommentThreads[0].Comments, Has.Count.EqualTo(1));
+                    Assert.That(file.InlineCommentThreads[0].LineNumber, Is.EqualTo(2));
+
+                    pullRequest = CreatePullRequest(comment1, comment2);
+                    UpdateReadPullRequest(service, pullRequest);
+                    await target.Refresh();
+
+                    Assert.That(file.InlineCommentThreads[0].Comments, Has.Count.EqualTo(2));
+                    Assert.That(file.InlineCommentThreads[0].LineNumber, Is.EqualTo(2));
+                }
             }
-        }
 
-        public class TheUpdateMethod
-        {
-            [Fact]
+            [Test]
             public async Task DoesntThrowIfGetFileCalledDuringUpdate()
             {
-                var comment = CreateComment(@"@@ -1,4 +1,4 @@
+                var thread = CreateThread(@"@@ -1,4 +1,4 @@
  Line 1
  Line 2
 -Line 3
@@ -629,14 +611,14 @@ Line 4";
 
                 using (var diffService = new FakeDiffService())
                 {
-                    var pullRequest = CreatePullRequest(comment);
-                    var service = CreateService(diffService);
+                    var pullRequest = CreatePullRequest(thread);
+                    var service = CreateRealSessionService(diffService);
 
                     var target = new PullRequestSession(
                         service,
-                        Substitute.For<IAccount>(),
+                        CreateActor(),
                         pullRequest,
-                        Substitute.For<ILocalRepositoryModel>(),
+                        CreateLocalRepository(),
                         string.Empty,
                         true);
 
@@ -644,76 +626,191 @@ Line 4";
 
                     // Simulate calling GetFile with a file that's not yet been initialized
                     // while doing the Update.
-                    service.WhenForAnyArgs(x => x.Diff(null, null, null, null, null))
+                    service.WhenForAnyArgs(x => x.Diff(null, null, null, null))
                         .Do(_ => target.GetFile("other.cs").Forget());
+                    UpdateReadPullRequest(service, pullRequest);
 
-                    await target.Update(pullRequest);
+                    await target.Refresh();
                 }
             }
         }
 
-        static IPullRequestReviewCommentModel CreateComment(string diffHunk, string body = "Comment")
+        static ActorModel CreateActor(string login = null)
         {
-            var result = Substitute.For<IPullRequestReviewCommentModel>();
-            result.Body.Returns(body);
-            result.DiffHunk.Returns(diffHunk);
-            result.Path.Returns(FilePath);
-            result.OriginalCommitId.Returns("ORIG");
-            result.OriginalPosition.Returns(1);
+            return new ActorModel { Login = login ?? "Viewer" };
+        }
+
+        static PullRequestReviewCommentModel CreateComment(
+            string id = "comment1",
+            string body = "body")
+        {
+            return new PullRequestReviewCommentModel
+            {
+                Id = "1",
+                Body = body,
+            };
+        }
+
+        static PullRequestReviewModel CreateReview(
+            string id = "review1",
+            ActorModel author = null,
+            PullRequestReviewState state = PullRequestReviewState.Approved,
+            params PullRequestReviewCommentModel[] comments)
+        {
+            return new PullRequestReviewModel
+            {
+                Id = id,
+                Author = author ?? CreateActor(),
+                Comments = comments,
+                State = state,
+            };
+        }
+
+        static PullRequestReviewThreadModel CreateThread(string diffHunk, string body = "Comment")
+        {
+            return new PullRequestReviewThreadModel
+            {
+                DiffHunk = diffHunk,
+                Path = FilePath,
+                OriginalCommitSha = "ORIG",
+                OriginalPosition = 1,
+                Comments = new[]
+                {
+                    CreateComment(body),
+                }
+            };
+        }
+
+        static PullRequestDetailModel CreatePullRequest()
+        {
+            return CreatePullRequest(new PullRequestReviewModel[0]);
+        }
+
+        static PullRequestDetailModel CreatePullRequest(params PullRequestReviewModel[] reviews)
+        {
+            return new PullRequestDetailModel
+            {
+                Id = "pr1",
+                Number = PullRequestNumber,
+                BaseRefName = "BASE",
+                BaseRefSha = "BASE_SHA",
+                BaseRepositoryOwner = "owner",
+                HeadRefName = "HEAD",
+                HeadRefSha = "HEAD_SHA",
+                HeadRepositoryOwner = "owner",
+                ChangedFiles = new[]
+                {
+                    new PullRequestFileModel { FileName = FilePath },
+                    new PullRequestFileModel { FileName = "other.cs" },
+                },
+                Threads = new[]
+                {
+                    new PullRequestReviewThreadModel
+                    {
+                        Comments = reviews.SelectMany(x => x.Comments).ToList(),
+                    },
+                },
+                Reviews = reviews,
+            };
+        }
+
+        static PullRequestDetailModel CreatePullRequest(params PullRequestReviewThreadModel[] threads)
+        {
+            return new PullRequestDetailModel
+            {
+                Id = "pr1",
+                Number = PullRequestNumber,
+                BaseRefName = "BASE",
+                BaseRefSha = "BASE_SHA",
+                BaseRepositoryOwner = "owner",
+                HeadRefName = "HEAD",
+                HeadRefSha = "HEAD_SHA",
+                HeadRepositoryOwner = "owner",
+                ChangedFiles = new[]
+                {
+                    new PullRequestFileModel { FileName = FilePath },
+                    new PullRequestFileModel { FileName = "other.cs" },
+                },
+                Threads = threads,
+                Reviews = new[]
+                {
+                    new PullRequestReviewModel
+                    {
+                        Author = CreateActor(),
+                        Comments = threads.SelectMany(x => x.Comments).ToList(),
+                    },
+                }
+            };
+        }
+
+        static ILocalRepositoryModel CreateLocalRepository()
+        {
+            var result = Substitute.For<ILocalRepositoryModel>();
+            result.CloneUrl.Returns(new UriString("https://github.com/owner/repo"));
             return result;
         }
 
-        static IPullRequestModel CreatePullRequest(params IPullRequestReviewCommentModel[] comments)
-        {
-            var changedFile1 = Substitute.For<IPullRequestFileModel>();
-            changedFile1.FileName.Returns("test.cs");
-            var changedFile2 = Substitute.For<IPullRequestFileModel>();
-            changedFile2.FileName.Returns("other.cs");
-
-            var result = Substitute.For<IPullRequestModel>();
-            result.Number.Returns(PullRequestNumber);
-            result.Base.Returns(new GitReferenceModel("BASE", "master", "BASE_SHA", RepoUrl));
-            result.Head.Returns(new GitReferenceModel("HEAD", "pr", "HEAD_SHA", RepoUrl));
-            result.ChangedFiles.Returns(new[] { changedFile1, changedFile2 });
-            result.ReviewComments.Returns(comments);
-
-            return result;
-        }
-
-        static IRepository CreateRepository()
-        {
-            var result = Substitute.For<IRepository>();
-            var branch = Substitute.For<Branch>();
-            var commit = Substitute.For<Commit>();
-            commit.Sha.Returns("BRANCH_TIP");
-            branch.Tip.Returns(commit);
-            result.Head.Returns(branch);
-            return result;
-        }
-
-        static IPullRequestSessionService CreateService(FakeDiffService diffService)
+        static IPullRequestSessionService CreateMockSessionService()
         {
             var result = Substitute.For<IPullRequestSessionService>();
-            result.Diff(
-                Arg.Any<ILocalRepositoryModel>(),
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<byte[]>())
-                .Returns(i => diffService.Diff(
-                    null,
-                    i.ArgAt<string>(1),
-                    i.ArgAt<string>(2),
-                    i.ArgAt<string>(3),
-                    i.ArgAt<byte[]>(4)));
-            result.GetTipSha(Arg.Any<ILocalRepositoryModel>()).Returns("BRANCH_TIP");
-
-            var diffChunk = "@@ -1,4 +1,4 @@";
-            result.PostReviewComment(null, null, null, 0, null, 0).ReturnsForAnyArgs(i =>
-                CreateComment(diffChunk, i.ArgAt<string>(4)));
-            result.PostReviewComment(null, null, null, 0, null, null, null, 0).ReturnsForAnyArgs(i =>
-                CreateComment(diffChunk, i.ArgAt<string>(4)));
             return result;
+        }
+
+        static IPullRequestSessionService CreateRealSessionService(IDiffService diffService = null)
+        {
+            var result = Substitute.ForPartsOf<PullRequestSessionService>(
+                Substitute.For<IGitService>(),
+                Substitute.For<IGitClient>(),
+                diffService ?? Substitute.For<IDiffService>(),
+                Substitute.For<IApiClientFactory>(),
+                Substitute.For<IGraphQLClientFactory>(),
+                Substitute.For<IUsageTracker>());
+
+            result.GetTipSha(Arg.Any<ILocalRepositoryModel>()).Returns("BRANCH_TIP");
+            result.GetPullRequestMergeBase(Arg.Any<ILocalRepositoryModel>(), Arg.Any<PullRequestDetailModel>())
+                .Returns("MERGE_BASE");
+            return result;
+        }
+
+        static PullRequestSession CreateTarget(
+            IPullRequestSessionService service,
+            string localRepositoryOwner,
+            string remoteRepositoryOwner,
+            bool hasPendingReview)
+        {
+            var repository = Substitute.For<ILocalRepositoryModel>();
+
+            repository.CloneUrl.Returns(new UriString($"https://github.com/{localRepositoryOwner}/reop"));
+            repository.Owner.Returns(localRepositoryOwner);
+            repository.Name.Returns("repo");
+
+            var pr = CreatePullRequest();
+            var user = CreateActor();
+
+            if (hasPendingReview)
+            {
+                pr.Reviews = new[]
+                {
+                        CreateReview(id: "pendingReviewId", author: user, state: PullRequestReviewState.Pending),
+                    };
+            }
+
+            return new PullRequestSession(
+                service,
+                user,
+                pr,
+                repository,
+                remoteRepositoryOwner,
+                true);
+        }
+
+        static void UpdateReadPullRequest(IPullRequestSessionService service, PullRequestDetailModel pullRequest)
+        {
+            service.ReadPullRequestDetail(
+                Arg.Any<HostAddress>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<int>()).Returns(pullRequest);
         }
     }
 }

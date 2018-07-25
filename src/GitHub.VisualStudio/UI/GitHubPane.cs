@@ -1,20 +1,21 @@
 ﻿using System;
+using System.Threading.Tasks;
+using System.ComponentModel.Design;
+using System.Diagnostics.CodeAnalysis;
+using System.Reactive.Linq;
 using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Controls;
+using GitHub.Factories;
+using GitHub.Services;
+using GitHub.ViewModels.GitHubPane;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
-using System.ComponentModel.Design;
-using System.Windows.Controls;
-using GitHub.Services;
-using GitHub.Extensions;
-using GitHub.Models;
-using GitHub.UI;
-using GitHub.ViewModels;
-using System.Diagnostics;
-using GitHub.VisualStudio.UI.Views;
+using Microsoft.VisualStudio.Threading;
+using ReactiveUI;
 
 namespace GitHub.VisualStudio.UI
 {
-
     /// <summary>
     /// This class implements the tool window exposed by this package and hosts a user control.
     /// </summary>
@@ -27,21 +28,42 @@ namespace GitHub.VisualStudio.UI
     /// </para>
     /// </remarks>
     [Guid(GitHubPaneGuid)]
-    public class GitHubPane : ToolWindowPane, IServiceProviderAware, IViewHost
+    public class GitHubPane : ToolWindowPane
     {
         public const string GitHubPaneGuid = "6b0fdc0a-f28e-47a0-8eed-cc296beff6d2";
-        bool initialized = false;
 
-        IView View
+        JoinableTask<IGitHubPaneViewModel> viewModelTask;
+
+        IDisposable viewSubscription;
+        ContentPresenter contentPresenter;
+
+        public FrameworkElement View
         {
-            get { return Content as IView; }
-            set { Content = value; }
+            get { return contentPresenter.Content as FrameworkElement; }
+            set
+            {
+                viewSubscription?.Dispose();
+                viewSubscription = null;
+
+                contentPresenter.Content = value;
+
+                viewSubscription = value.WhenAnyValue(x => x.DataContext)
+                    .SelectMany(x =>
+                    {
+                        var pane = x as IGitHubPaneViewModel;
+                        return pane?.WhenAnyValue(p => p.IsSearchEnabled, p => p.SearchQuery)
+                            ?? Observable.Return(Tuple.Create<bool, string>(false, null));
+                    })
+                    .ObserveOn(RxApp.MainThreadScheduler)
+                    .Subscribe(x => UpdateSearchHost(x.Item1, x.Item2));
+            }
         }
 
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Usage", "CA2214:DoNotCallOverridableMethodsInConstructors")]
+        [SuppressMessage("Microsoft.Usage", "CA2214:DoNotCallOverridableMethodsInConstructors")]
         public GitHubPane() : base(null)
         {
             Caption = "GitHub";
+            Content = contentPresenter = new ContentPresenter();
 
             BitmapImageMoniker = new Microsoft.VisualStudio.Imaging.Interop.ImageMoniker()
             {
@@ -50,32 +72,144 @@ namespace GitHub.VisualStudio.UI
             };
             ToolBar = new CommandID(Guids.guidGitHubToolbarCmdSet, PkgCmdIDList.idGitHubToolbar);
             ToolBarLocation = (int)VSTWT_LOCATION.VSTWT_TOP;
-            var provider = Services.GitHubServiceProvider;
-            var uiProvider = provider.GetServiceSafe<IUIProvider>();
-            View = uiProvider.GetView(Exports.UIViewType.GitHubPane);
         }
+
+        public override bool SearchEnabled => true;
 
         protected override void Initialize()
         {
-            base.Initialize();
-            Initialize(this);
+            // Using JoinableTaskFactory from parent AsyncPackage. That way if VS shuts down before this
+            // work is done, we won't risk crashing due to arbitrary work going on in background threads.
+            var asyncPackage = (AsyncPackage)Package;
+            viewModelTask = asyncPackage.JoinableTaskFactory.RunAsync(() => InitializeAsync(asyncPackage));
         }
 
-        public void Initialize(IServiceProvider serviceProvider)
-        {
-            if (!initialized)
-            {
-                initialized = true;
+        public Task<IGitHubPaneViewModel> GetViewModelAsync() => viewModelTask.JoinAsync();
 
-                var vm = View.ViewModel as IServiceProviderAware;
-                Debug.Assert(vm != null);
-                vm?.Initialize(serviceProvider);
+        async Task<IGitHubPaneViewModel> InitializeAsync(AsyncPackage asyncPackage)
+        {
+            try
+            {
+                ShowInitializing();
+
+                // Allow MEF to initialize its cache asynchronously
+                var provider = (IGitHubServiceProvider)await asyncPackage.GetServiceAsync(typeof(IGitHubServiceProvider));
+
+                var teServiceHolder = provider.GetService<ITeamExplorerServiceHolder>();
+                teServiceHolder.ServiceProvider = this;
+
+                var factory = provider.GetService<IViewViewModelFactory>();
+                var viewModel = provider.ExportProvider.GetExportedValue<IGitHubPaneViewModel>();
+                await viewModel.InitializeAsync(this);
+
+                View = factory.CreateView<IGitHubPaneViewModel>();
+                View.DataContext = viewModel;
+
+                return viewModel;
+            }
+            catch (Exception e)
+            {
+                ShowError(e);
+                throw;
             }
         }
 
-        public void ShowView(ViewWithData data)
+        [SuppressMessage("Microsoft.Design", "CA1061:DoNotHideBaseClassMethods", Justification = "WTF CA, I'm overriding!")]
+        public override IVsSearchTask CreateSearch(uint dwCookie, IVsSearchQuery pSearchQuery, IVsSearchCallback pSearchCallback)
         {
-            View.ViewModel?.Initialize(data);
+            var pane = View?.DataContext as IGitHubPaneViewModel;
+
+            if (pane != null)
+            {
+                return new SearchTask(pane, dwCookie, pSearchQuery, pSearchCallback);
+            }
+
+            return null;
+        }
+
+        public override void ClearSearch()
+        {
+            var pane = View?.DataContext as IGitHubPaneViewModel;
+
+            if (pane != null)
+            {
+                pane.SearchQuery = null;
+            }
+        }
+
+        public override void OnToolWindowCreated()
+        {
+            base.OnToolWindowCreated();
+
+            Marshal.ThrowExceptionForHR(((IVsWindowFrame)Frame)?.SetProperty(
+                (int)__VSFPROPID5.VSFPROPID_SearchPlacement,
+                __VSSEARCHPLACEMENT.SP_STRETCH) ?? 0);
+
+            var pane = View?.DataContext as IGitHubPaneViewModel;
+            UpdateSearchHost(pane?.IsSearchEnabled ?? false, pane?.SearchQuery);
+        }
+
+        void ShowInitializing()
+        {
+            // This page is intentionally left blank.
+        }
+
+        void ShowError(Exception e)
+        {
+            View = new TextBox
+            {
+                Text = e.ToString(),
+                IsReadOnly = true,
+            };
+        }
+
+        void UpdateSearchHost(bool enabled, string query)
+        {
+            if (SearchHost != null)
+            {
+                SearchHost.IsEnabled = enabled;
+
+                if (SearchHost.SearchQuery?.SearchString != query)
+                {
+                    SearchHost.SearchAsync(query != null ? new SearchQuery(query) : null);
+                }
+            }
+        }
+
+        class SearchTask : VsSearchTask
+        {
+            readonly IGitHubPaneViewModel viewModel;
+
+            public SearchTask(
+                IGitHubPaneViewModel viewModel,
+                uint dwCookie,
+                IVsSearchQuery pSearchQuery,
+                IVsSearchCallback pSearchCallback)
+                : base(dwCookie, pSearchQuery, pSearchCallback)
+            {
+                this.viewModel = viewModel;
+            }
+
+            protected override void OnStartSearch()
+            {
+                viewModel.SearchQuery = SearchQuery.SearchString;
+                base.OnStartSearch();
+            }
+
+            protected override void OnStopSearch() => viewModel.SearchQuery = null;
+        }
+
+        class SearchQuery : IVsSearchQuery
+        {
+            public SearchQuery(string query)
+            {
+                SearchString = query;
+            }
+
+            public uint ParseError => 0;
+            public string SearchString { get; }
+
+            public uint GetTokens(uint dwMaxTokens, IVsSearchToken[] rgpSearchTokens) => 0;
         }
     }
 }

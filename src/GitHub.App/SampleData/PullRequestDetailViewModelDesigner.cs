@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using GitHub.Models;
 using GitHub.Services;
 using GitHub.ViewModels;
+using GitHub.ViewModels.GitHubPane;
 using ReactiveUI;
 
 namespace GitHub.SampleData
@@ -30,19 +31,16 @@ namespace GitHub.SampleData
     [ExcludeFromCodeCoverage]
     public class PullRequestDetailViewModelDesigner : PanePageViewModelBase, IPullRequestDetailViewModel
     {
-        private List<IPullRequestChangeNode> changedFilesTree;
-
         public PullRequestDetailViewModelDesigner()
         {
             var repoPath = @"C:\Repo";
 
-            Model = new PullRequestModel(419, 
-                "Error handling/bubbling from viewmodels to views to viewhosts",
-                 new AccountDesigner { Login = "shana", IsUser = true },
-                 DateTime.Now.Subtract(TimeSpan.FromDays(3)))
+            Model = new PullRequestDetailModel
             {
-                State = PullRequestStateEnum.Open,
-                CommitCount = 9,
+                Number = 419,
+                Title = "Error handling/bubbling from viewmodels to views to viewhosts",
+                Author = new ActorModel { Login = "shana" },
+                UpdatedAt = DateTimeOffset.Now.Subtract(TimeSpan.FromDays(3)),
             };
 
             SourceBranchDisplayName = "shana/error-handling";
@@ -60,7 +58,7 @@ This requires that errors be propagated from the viewmodel to the view and from 
             var repositoriesDir = new PullRequestDirectoryNode("Repositories");
             var itrackingBranch = new PullRequestFileNode(repoPath, @"GitHub\Models\ITrackingBranch.cs", "abc", PullRequestFileStatus.Modified, null);
             var oldBranchModel = new PullRequestFileNode(repoPath, @"GitHub\Models\OldBranchModel.cs", "abc", PullRequestFileStatus.Removed, null);
-            var concurrentRepositoryConnection = new PullRequestFileNode(repoPath, @"GitHub\Repositories\ConcurrentRepositoryConnection.cs", "abc", PullRequestFileStatus.Added, "add");
+            var concurrentRepositoryConnection = new PullRequestFileNode(repoPath, @"GitHub\Repositories\ConcurrentRepositoryConnection.cs", "abc", PullRequestFileStatus.Added, null);
 
             repositoriesDir.Files.Add(concurrentRepositoryConnection);
             modelsDir.Directories.Add(repositoriesDir);
@@ -68,41 +66,64 @@ This requires that errors be propagated from the viewmodel to the view and from 
             modelsDir.Files.Add(oldBranchModel);
             gitHubDir.Directories.Add(modelsDir);
 
-            changedFilesTree = new List<IPullRequestChangeNode>();
-            changedFilesTree.Add(gitHubDir);
+            Reviews = new[]
+            {
+                new PullRequestReviewSummaryViewModel
+                {
+                    Id = "id1",
+                    User = new ActorViewModel { Login = "grokys" },
+                    State = PullRequestReviewState.Pending,
+                    FileCommentCount = 0,
+                },
+                new PullRequestReviewSummaryViewModel
+                {
+                    Id = "id",
+                    User = new ActorViewModel { Login = "jcansdale" },
+                    State = PullRequestReviewState.Approved,
+                    FileCommentCount = 5,
+                },
+                new PullRequestReviewSummaryViewModel
+                {
+                    Id = "id3",
+                    User = new ActorViewModel { Login = "shana" },
+                    State = PullRequestReviewState.ChangesRequested,
+                    FileCommentCount = 5,
+                },
+                new PullRequestReviewSummaryViewModel
+                {
+                },
+            };
+
+            Files = new PullRequestFilesViewModelDesigner();
         }
 
-        public IPullRequestModel Model { get; }
+        public PullRequestDetailModel Model { get; }
         public IPullRequestSession Session { get; }
         public ILocalRepositoryModel LocalRepository { get; }
-        public IRemoteRepositoryModel RemoteRepository { get; }
+        public string RemoteRepositoryOwner { get; }
+        public int Number { get; set; }
+        public IActorViewModel Author { get; set; }
         public string SourceBranchDisplayName { get; set; }
         public string TargetBranchDisplayName { get; set; }
         public int CommentCount { get; set; }
-        public bool IsLoading { get; }
-        public bool IsBusy { get; }
         public bool IsCheckedOut { get; }
         public bool IsFromFork { get; }
         public string Body { get; }
-        public IReadOnlyList<IPullRequestChangeNode> ChangedFilesTree => changedFilesTree;
+        public IReadOnlyList<IPullRequestReviewSummaryViewModel> Reviews { get; }
+        public IPullRequestFilesViewModel Files { get; set; }
         public IPullRequestCheckoutState CheckoutState { get; set; }
         public IPullRequestUpdateState UpdateState { get; set; }
         public string OperationError { get; set; }
         public string ErrorMessage { get; set; }
+        public Uri WebUrl { get; set; }
 
         public ReactiveCommand<Unit> Checkout { get; }
         public ReactiveCommand<Unit> Pull { get; }
         public ReactiveCommand<Unit> Push { get; }
         public ReactiveCommand<object> OpenOnGitHub { get; }
-        public ReactiveCommand<object> DiffFile { get; }
-        public ReactiveCommand<object> DiffFileWithWorkingDirectory { get; }
-        public ReactiveCommand<object> OpenFileInWorkingDirectory { get; }
-        public ReactiveCommand<object> ViewFile { get; }
+        public ReactiveCommand<object> ShowReview { get; }
 
-        public Task<string> ExtractFile(IPullRequestFileNode file, bool head)
-        {
-            return null;
-        }
+        public Task InitializeAsync(ILocalRepositoryModel localRepository, IConnection connection, string owner, string repo, int number) => Task.CompletedTask;
 
         public string GetLocalFilePath(IPullRequestFileNode file)
         {

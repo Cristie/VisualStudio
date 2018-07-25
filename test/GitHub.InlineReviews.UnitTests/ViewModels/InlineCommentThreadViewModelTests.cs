@@ -1,60 +1,57 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
-using GitHub.Api;
 using GitHub.InlineReviews.ViewModels;
 using GitHub.Models;
 using GitHub.Services;
 using NSubstitute;
-using Octokit;
-using Xunit;
+using NUnit.Framework;
 
 namespace GitHub.InlineReviews.UnitTests.ViewModels
 {
     public class InlineCommentThreadViewModelTests
     {
-        [Fact]
+        [Test]
         public void CreatesComments()
         {
             var target = new InlineCommentThreadViewModel(
-                Substitute.For<IPullRequestSession>(),
+                CreateSession(),
                 CreateComments("Comment 1", "Comment 2"));
 
-            Assert.Equal(3, target.Comments.Count);
-            Assert.Equal(
-                new[] 
+            Assert.That(3, Is.EqualTo(target.Comments.Count));
+            Assert.That(
+                new[]
                 {
                     "Comment 1",
                     "Comment 2",
                     string.Empty
-                }, 
-                target.Comments.Select(x => x.Body));
+                },
+                Is.EqualTo(target.Comments.Select(x => x.Body)));
 
-            Assert.Equal(
+            Assert.That(
                 new[]
                 {
                     CommentEditState.None,
                     CommentEditState.None,
                     CommentEditState.Placeholder,
                 },
-                target.Comments.Select(x => x.EditState));
+                Is.EqualTo(target.Comments.Select(x => x.EditState)));
         }
 
-        [Fact]
+        [Test]
         public void PlaceholderCommitEnabledWhenCommentHasBody()
         {
             var target = new InlineCommentThreadViewModel(
-                Substitute.For<IPullRequestSession>(),
+                CreateSession(),
                 CreateComments("Comment 1"));
 
-            Assert.False(target.Comments[1].CommitEdit.CanExecute(null));
+            Assert.That(target.Comments[1].CommitEdit.CanExecute(null), Is.False);
 
             target.Comments[1].Body = "Foo";
-            Assert.True(target.Comments[1].CommitEdit.CanExecute(null));
+            Assert.That(target.Comments[1].CommitEdit.CanExecute(null), Is.True);
         }
 
-        [Fact]
+        [Test]
         public void PostsCommentInReplyToCorrectComment()
         {
             var session = CreateSession();
@@ -65,44 +62,44 @@ namespace GitHub.InlineReviews.UnitTests.ViewModels
             target.Comments[2].Body = "New Comment";
             target.Comments[2].CommitEdit.Execute(null);
 
-            session.Received(1).PostReviewComment("New Comment", 1);
+            session.Received(1).PostReviewComment("New Comment", "1");
         }
 
-        IApiClient CreateApiClient()
+        InlineCommentModel CreateComment(string id, string body)
         {
-            var result = Substitute.For<IApiClient>();
-            result.CreatePullRequestReviewComment(null, null, 0, null, 0)
-                .ReturnsForAnyArgs(_ => Observable.Return(new PullRequestReviewComment()));
-            return result;
+            return new InlineCommentModel
+            {
+                Comment = new PullRequestReviewCommentModel
+                {
+                    Id = id,
+                    Body = body,
+                },
+                Review = new PullRequestReviewModel(),
+            };
         }
 
-        IPullRequestReviewCommentModel CreateComment(int id, string body)
-        {
-            var comment = Substitute.For<IPullRequestReviewCommentModel>();
-            comment.Body.Returns(body);
-            comment.Id.Returns(id);
-            return comment;
-        }
-
-        IEnumerable<IPullRequestReviewCommentModel> CreateComments(params string[] bodies)
+        IEnumerable<InlineCommentModel> CreateComments(params string[] bodies)
         {
             var id = 1;
 
             foreach (var body in bodies)
             {
-                yield return CreateComment(id++, body);
+                yield return CreateComment((id++).ToString(), body);
             }
         }
 
         IPullRequestSession CreateSession()
         {
             var result = Substitute.For<IPullRequestSession>();
+            result.User.Returns(new ActorModel { Login = "Viewer" });
             result.RepositoryOwner.Returns("owner");
             result.LocalRepository.Name.Returns("repo");
             result.LocalRepository.Owner.Returns("shouldnt-be-used");
-            result.PullRequest.Number.Returns(47);
+            result.PullRequest.Returns(new PullRequestDetailModel
+            {
+                Number = 47,
+            });
             return result;
         }
-
     }
 }

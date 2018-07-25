@@ -162,20 +162,6 @@ namespace GitHub.Models
         public DateTimeOffset CreatedAt { get; set; }
         public DateTimeOffset UpdatedAt { get; set; }
         public IAccount Author { get; set; }
-        public IReadOnlyCollection<IPullRequestFileModel> ChangedFiles { get; set; } = new IPullRequestFileModel[0];
-        public IReadOnlyCollection<ICommentModel> Comments { get; set; } = new ICommentModel[0];
-
-        IReadOnlyCollection<IPullRequestReviewCommentModel> reviewComments = new IPullRequestReviewCommentModel[0];
-        public IReadOnlyCollection<IPullRequestReviewCommentModel> ReviewComments
-        {
-            get { return reviewComments; }
-            set
-            {
-                Guard.ArgumentNotNull(value, nameof(value));
-                reviewComments = value;
-                this.RaisePropertyChange();
-            }
-        }
 
         IAccount assignee;
         public IAccount Assignee

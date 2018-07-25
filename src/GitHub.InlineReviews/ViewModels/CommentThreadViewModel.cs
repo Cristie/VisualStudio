@@ -1,7 +1,9 @@
 ﻿using System;
 using System.Collections.ObjectModel;
+using System.Reactive;
 using GitHub.Extensions;
 using GitHub.Models;
+using GitHub.ViewModels;
 using ReactiveUI;
 
 namespace GitHub.InlineReviews.ViewModels
@@ -9,32 +11,32 @@ namespace GitHub.InlineReviews.ViewModels
     /// <summary>
     /// Base view model for a thread of comments.
     /// </summary>
-    public abstract class CommentThreadViewModel : ReactiveObject, ICommentThreadViewModel, IDisposable
+    public abstract class CommentThreadViewModel : ReactiveObject, ICommentThreadViewModel
     {
-        ReactiveCommand<ICommentModel> postComment;
-        IDisposable placeholderSubscription;
+        ReactiveCommand<Unit> postComment;
+        ReactiveCommand<Unit> editComment;
+        ReactiveCommand<Unit> deleteComment;
 
         /// <summary>
         /// Intializes a new instance of the <see cref="CommentThreadViewModel"/> class.
         /// </summary>
         /// <param name="currentUser">The current user.</param>
-        /// <param name="commentModels">The thread comments.</param>
-        public CommentThreadViewModel(IAccount currentUser)
+        protected CommentThreadViewModel(ActorModel currentUser)
         {
             Guard.ArgumentNotNull(currentUser, nameof(currentUser));
 
             Comments = new ObservableCollection<ICommentViewModel>();
-            CurrentUser = currentUser;
+            CurrentUser = new ActorViewModel(currentUser);
         }
 
         /// <inheritdoc/>
         public ObservableCollection<ICommentViewModel> Comments { get; }
 
         /// <inheritdoc/>
-        public ReactiveCommand<ICommentModel> PostComment
+        public ReactiveCommand<Unit> PostComment
         {
             get { return postComment; }
-            set
+            protected set
             {
                 Guard.ArgumentNotNull(value, nameof(value));
                 postComment = value;
@@ -45,24 +47,31 @@ namespace GitHub.InlineReviews.ViewModels
             }
         }
 
-        /// <inheritdoc/>
-        public IAccount CurrentUser { get; }
-
-        public void Dispose()
+        public ReactiveCommand<Unit> EditComment
         {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
-
-        /// <inheritdoc/>
-        public abstract Uri GetCommentUrl(int id);
-
-        protected virtual void Dispose(bool disposing)
-        {
-            if (disposing)
+            get { return editComment; }
+            protected set
             {
-                placeholderSubscription?.Dispose();
+                Guard.ArgumentNotNull(value, nameof(value));
+                editComment = value;
+
+                value.ThrownExceptions.Subscribe(_ => { });
             }
         }
+
+        public ReactiveCommand<Unit> DeleteComment
+        {
+            get { return deleteComment; }
+            protected set
+            {
+                Guard.ArgumentNotNull(value, nameof(value));
+                deleteComment = value;
+
+                value.ThrownExceptions.Subscribe(_ => { });
+            }
+        }
+
+        /// <inheritdoc/>
+        public IActorViewModel CurrentUser { get; }
     }
 }

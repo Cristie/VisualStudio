@@ -1,28 +1,28 @@
-using System.Diagnostics.CodeAnalysis;
-using GitHub.ViewModels;
+using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading.Tasks;
 using GitHub.Models;
 using GitHub.Validation;
+using GitHub.ViewModels.GitHubPane;
 using ReactiveUI;
-using System;
-using System.Reactive;
 
 namespace GitHub.SampleData
 {
     [ExcludeFromCodeCoverage]
-    public class PullRequestCreationViewModelDesigner : DialogViewModelBase, IPullRequestCreationViewModel
+    public class PullRequestCreationViewModelDesigner : PanePageViewModelBase, IPullRequestCreationViewModel
     {
         public PullRequestCreationViewModelDesigner()
         {
             Branches = new List<IBranch>
             {
-                new BranchModel("master", new LocalRepositoryModel("http://github.com/user/repo")),
-                new BranchModel("don/stub-ui", new LocalRepositoryModel("http://github.com/user/repo")),
-                new BranchModel("feature/pr/views", new LocalRepositoryModel("http://github.com/user/repo")),
-                new BranchModel("release-1.0.17.0", new LocalRepositoryModel("http://github.com/user/repo")),
+                new BranchModel("master", new LocalRepositoryModel("http://github.com/user/repo", new GitServiceDesigner())),
+                new BranchModel("don/stub-ui", new LocalRepositoryModel("http://github.com/user/repo", new GitServiceDesigner())),
+                new BranchModel("feature/pr/views", new LocalRepositoryModel("http://github.com/user/repo", new GitServiceDesigner())),
+                new BranchModel("release-1.0.17.0", new LocalRepositoryModel("http://github.com/user/repo", new GitServiceDesigner())),
             }.AsReadOnly();
 
-            TargetBranch = new BranchModel("master", new LocalRepositoryModel("http://github.com/user/repo"));
+            TargetBranch = new BranchModel("master", new LocalRepositoryModel("http://github.com/user/repo", new GitServiceDesigner()));
             SourceBranch = Branches[2];
 
             SelectedAssignee = "Haacked (Phil Haack)";
@@ -41,6 +41,7 @@ namespace GitHub.SampleData
         public List<string> Users { get; set; }
 
         public IReactiveCommand<IPullRequestModel> CreatePullRequest { get; }
+        public IReactiveCommand<object> Cancel { get; }
 
         public string PRTitle { get; set; }
 
@@ -48,6 +49,6 @@ namespace GitHub.SampleData
 
         public ReactivePropertyValidator BranchValidator { get; }
 
-        public override IObservable<Unit> Done { get; }
+        public Task InitializeAsync(ILocalRepositoryModel repository, IConnection connection) => Task.CompletedTask;
     }
 }

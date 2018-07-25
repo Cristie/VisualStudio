@@ -1,15 +1,46 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Reactive;
 using System.Text;
+using System.Threading.Tasks;
 using GitHub.Models;
+using GitHub.Primitives;
 using LibGit2Sharp;
-using Octokit;
 
 namespace GitHub.Services
 {
     public interface IPullRequestService
     {
-        IObservable<IPullRequestModel> CreatePullRequest(IRepositoryHost host,
+        /// <summary>
+        /// Reads a page of pull request items.
+        /// </summary>
+        /// <param name="address">The host address.</param>
+        /// <param name="owner">The repository owner.</param>
+        /// <param name="name">The repository name.</param>
+        /// <param name="after">The end cursor of the previous page, or null for the first page.</param>
+        /// <returns>A page of pull request item models.</returns>
+        Task<Page<PullRequestListItemModel>> ReadPullRequests(
+            HostAddress address,
+            string owner,
+            string name,
+            string after,
+            PullRequestStateEnum[] states);
+
+        /// <summary>
+        /// Reads a page of users that can be assigned to pull requests.
+        /// </summary>
+        /// <param name="address">The host address.</param>
+        /// <param name="owner">The repository owner.</param>
+        /// <param name="name">The repository name.</param>
+        /// <param name="after">The end cursor of the previous page, or null for the first page.</param>
+        /// <returns>A page of author models.</returns>
+        Task<Page<ActorModel>> ReadAssignableUsers(
+            HostAddress address,
+            string owner,
+            string name,
+            string after);
+
+        IObservable<IPullRequestModel> CreatePullRequest(IModelService modelService,
             ILocalRepositoryModel sourceRepository, IRepositoryModel targetRepository,
             IBranch sourceBranch, IBranch targetBranch,
             string title, string body);
@@ -22,13 +53,20 @@ namespace GitHub.Services
         IObservable<bool> IsWorkingDirectoryClean(ILocalRepositoryModel repository);
 
         /// <summary>
+        /// Count the number of submodules that require syncing.
+        /// </summary>
+        /// <param name="repository">The repository.</param>
+        /// <returns>The number of submodules that need to be synced.</returns>
+        IObservable<int> CountSubmodulesToSync(ILocalRepositoryModel repository);
+
+        /// <summary>
         /// Checks out a pull request to a local branch.
         /// </summary>
         /// <param name="repository">The repository.</param>
         /// <param name="pullRequest">The pull request details.</param>
         /// <param name="localBranchName">The name of the local branch.</param>
         /// <returns></returns>
-        IObservable<Unit> Checkout(ILocalRepositoryModel repository, IPullRequestModel pullRequest, string localBranchName);
+        IObservable<Unit> Checkout(ILocalRepositoryModel repository, PullRequestDetailModel pullRequest, string localBranchName);
 
         /// <summary>
         /// Carries out a pull on the current branch.
@@ -41,6 +79,12 @@ namespace GitHub.Services
         /// </summary>
         /// <param name="repository">The repository.</param>
         IObservable<Unit> Push(ILocalRepositoryModel repository);
+
+        /// <summary>
+        /// Sync submodules on the current branch.
+        /// </summary>
+        /// <param name="repository">The repository.</param>
+        Task<bool> SyncSubmodules(ILocalRepositoryModel repository, Action<string> progress);
 
         /// <summary>
         /// Calculates the name of a local branch for a pull request avoiding clashes with existing branches.
@@ -57,7 +101,7 @@ namespace GitHub.Services
         /// <param name="repository">The repository.</param>
         /// <param name="pullRequest">The pull request details.</param>
         /// <returns></returns>
-        IObservable<IBranch> GetLocalBranches(ILocalRepositoryModel repository, IPullRequestModel pullRequest);
+        IObservable<IBranch> GetLocalBranches(ILocalRepositoryModel repository, PullRequestDetailModel pullRequest);
 
         /// <summary>
         /// Ensures that all local branches for the specified pull request are marked as PR branches.
@@ -73,7 +117,7 @@ namespace GitHub.Services
         /// for the specified pull request are indeed marked and returns a value indicating whether any branches
         /// have had the mark added.
         /// </remarks>
-        IObservable<bool> EnsureLocalBranchesAreMarkedAsPullRequests(ILocalRepositoryModel repository, IPullRequestModel pullRequest);
+        IObservable<bool> EnsureLocalBranchesAreMarkedAsPullRequests(ILocalRepositoryModel repository, PullRequestDetailModel pullRequest);
 
         /// <summary>
         /// Determines whether the specified pull request is from the specified repository.
@@ -81,7 +125,7 @@ namespace GitHub.Services
         /// <param name="repository">The repository.</param>
         /// <param name="pullRequest">The pull request details.</param>
         /// <returns></returns>
-        bool IsPullRequestFromRepository(ILocalRepositoryModel repository, IPullRequestModel pullRequest);
+        bool IsPullRequestFromRepository(ILocalRepositoryModel repository, PullRequestDetailModel pullRequest);
 
         /// <summary>
         /// Switches to an existing branch for the specified pull request.
@@ -89,7 +133,7 @@ namespace GitHub.Services
         /// <param name="repository">The repository.</param>
         /// <param name="pullRequest">The pull request details.</param>
         /// <returns></returns>
-        IObservable<Unit> SwitchToBranch(ILocalRepositoryModel repository, IPullRequestModel pullRequest);
+        IObservable<Unit> SwitchToBranch(ILocalRepositoryModel repository, PullRequestDetailModel pullRequest);
 
         /// <summary>
         /// Gets the history divergence between the current HEAD and the specified pull request.
@@ -100,12 +144,20 @@ namespace GitHub.Services
         IObservable<BranchTrackingDetails> CalculateHistoryDivergence(ILocalRepositoryModel repository, int pullRequestNumber);
 
         /// <summary>
+        /// Gets the SHA of the merge base for a pull request.
+        /// </summary>
+        /// <param name="repository">The repository.</param>
+        /// <param name="pullRequest">The pull request details.</param>
+        /// <returns></returns>
+        Task<string> GetMergeBase(ILocalRepositoryModel repository, PullRequestDetailModel pullRequest);
+
+        /// <summary>
         /// Gets the changes between the pull request base and head.
         /// </summary>
         /// <param name="repository">The repository.</param>
         /// <param name="pullRequest">The pull request details.</param>
         /// <returns></returns>
-        IObservable<TreeChanges> GetTreeChanges(ILocalRepositoryModel repository, IPullRequestModel pullRequest);
+        IObservable<TreeChanges> GetTreeChanges(ILocalRepositoryModel repository, PullRequestDetailModel pullRequest);
 
         /// <summary>
         /// Gets the pull request associated with the current branch.
@@ -117,7 +169,7 @@ namespace GitHub.Services
         /// </returns>
         /// <remarks>
         /// This method does not do an API request - it simply checks the mark left in the git
-        /// config by <see cref="Checkout(ILocalRepositoryModel, IPullRequestModel, string)"/>.
+        /// config by <see cref="Checkout(ILocalRepositoryModel, PullRequestDetailModel, string)"/>.
         /// </remarks>
         IObservable<Tuple<string, int>> GetPullRequestForCurrentBranch(ILocalRepositoryModel repository);
 
@@ -132,19 +184,19 @@ namespace GitHub.Services
         Encoding GetEncoding(ILocalRepositoryModel repository, string relativePath);
 
         /// <summary>
-        /// Gets a file as it appears in a pull request.
+        /// Extracts a file at the specified commit to a temporary file.
         /// </summary>
         /// <param name="repository">The repository.</param>
         /// <param name="pullRequest">The pull request details.</param>
-        /// <param name="fileName">The filename relative to the repository root.</param>
-        /// <param name="head">If true, gets the file at the PR head, otherwise gets the file at the PR base.</param>
+        /// <param name="relativePath">The path to the file, relative to the repository root.</param>
+        /// <param name="commitSha">The SHA of the commit.</param>
         /// <param name="encoding">The encoding to use.</param>
-        /// <returns>The paths of the left and right files for the diff.</returns>
-        IObservable<string> ExtractFile(
+        /// <returns>The path to the temporary file.</returns>
+        Task<string> ExtractToTempFile(
             ILocalRepositoryModel repository,
-            IPullRequestModel pullRequest,
-            string fileName,
-            bool head,
+            PullRequestDetailModel pullRequest,
+            string relativePath,
+            string commitSha,
             Encoding encoding);
 
         /// <summary>
@@ -156,5 +208,21 @@ namespace GitHub.Services
         IObservable<Unit> RemoveUnusedRemotes(ILocalRepositoryModel repository);
 
         IObservable<string> GetPullRequestTemplate(ILocalRepositoryModel repository);
+
+        /// <summary>
+        /// Gets the unique commits from <paramref name="compareBranch"/> to the merge base of 
+        /// <paramref name="baseBranch"/> and <paramref name="compareBranch"/> and returns their
+        /// commit messages.
+        /// </summary>
+        /// <param name="repository">The repository.</param>
+        /// <param name="baseBranch">The base branch to find a merge base with.</param>
+        /// <param name="compareBranch">The compare branch to find a merge base with.</param>
+        /// <param name="maxCommits">The maximum number of commits to return.</param>
+        /// <returns>An enumerable of unique commits from the merge base to the compareBranch.</returns>
+        IObservable<IReadOnlyList<CommitMessage>> GetMessagesForUniqueCommits(
+            ILocalRepositoryModel repository,
+            string baseBranch,
+            string compareBranch,
+            int maxCommits);
     }
 }

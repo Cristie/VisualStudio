@@ -5,10 +5,10 @@ using System.IO;
 using System.Linq;
 using GitHub.Primitives;
 using GitHub.UI;
+using GitHub.Exports;
 using GitHub.Services;
 using GitHub.Extensions;
 using System.Threading.Tasks;
-using GitHub.Exports;
 
 namespace GitHub.Models
 {
@@ -18,17 +18,22 @@ namespace GitHub.Models
     [DebuggerDisplay("{DebuggerDisplay,nq}")]
     public class LocalRepositoryModel : RepositoryModel, ILocalRepositoryModel, IEquatable<LocalRepositoryModel>
     {
+        readonly IGitService gitService;
+
         /// <summary>
         /// Initializes a new instance of the <see cref="LocalRepositoryModel"/> class.
         /// </summary>
         /// <param name="name">The repository name.</param>
         /// <param name="cloneUrl">The repository's clone URL.</param>
         /// <param name="localPath">The repository's local path.</param>
-        public LocalRepositoryModel(string name, UriString cloneUrl, string localPath)
+        /// <param name="gitService">The service used to refresh the repository's URL.</param>
+        public LocalRepositoryModel(string name, UriString cloneUrl, string localPath, IGitService gitService)
             : base(name, cloneUrl)
         {
             Guard.ArgumentNotEmptyString(localPath, nameof(localPath));
+            Guard.ArgumentNotNull(gitService, nameof(gitService));
 
+            this.gitService = gitService;
             LocalPath = localPath;
             Icon = Octicon.repo;
         }
@@ -37,9 +42,13 @@ namespace GitHub.Models
         /// Initializes a new instance of the <see cref="LocalRepositoryModel"/> class.
         /// </summary>
         /// <param name="path">The repository's local path.</param>
-        public LocalRepositoryModel(string path)
-            : base(path)
+        /// <param name="gitService">The service used to find the repository's URL.</param>
+        public LocalRepositoryModel(string path, IGitService gitService)
+            : base(path, gitService)
         {
+            Guard.ArgumentNotNull(gitService, nameof(gitService));
+
+            this.gitService = gitService;
             LocalPath = path;
             Icon = Octicon.repo;
         }
@@ -51,7 +60,7 @@ namespace GitHub.Models
         {
             if (LocalPath == null)
                 return;
-            CloneUrl = GitService.GitServiceHelper.GetUri(LocalPath);
+            CloneUrl = gitService.GetUri(LocalPath);
         }
 
         /// <summary>
@@ -68,7 +77,7 @@ namespace GitHub.Models
             if (CloneUrl == null)
                 return null;
 
-            var sha = await GitService.GitServiceHelper.GetLatestPushedSha(path ?? LocalPath);
+            var sha = await gitService.GetLatestPushedSha(path ?? LocalPath);
             // this also incidentally checks whether the repo has a valid LocalPath
             if (String.IsNullOrEmpty(sha))
                 return CloneUrl.ToRepositoryUrl().AbsoluteUri;
@@ -157,8 +166,10 @@ namespace GitHub.Models
         {
             get
             {
-                var repo = GitService.GitServiceHelper.GetRepository(LocalPath);
-                return repo?.Commits.FirstOrDefault()?.Sha ?? String.Empty;
+                using (var repo = gitService.GetRepository(LocalPath))
+                {
+                    return repo?.Commits.FirstOrDefault()?.Sha ?? string.Empty;
+                }
             }
         }
 
@@ -169,8 +180,11 @@ namespace GitHub.Models
         {
             get
             {
-                var repo = GitService.GitServiceHelper.GetRepository(LocalPath);
-                return new BranchModel(repo?.Head, this);
+                // BranchModel doesn't keep a reference to Repository
+                using (var repo = gitService.GetRepository(LocalPath))
+                {
+                    return new BranchModel(repo?.Head, this, gitService);
+                }
             }
         }
 

@@ -1,8 +1,9 @@
 ﻿using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Markup;
 
-[assembly: AssemblyTitle("GitHub.UI.Recative")]
+[assembly: AssemblyTitle("GitHub.UI.Reactive")]
 [assembly: AssemblyDescription("GitHub flavored WPF styles and controls that require Rx and RxUI")]
 [assembly: Guid("885a491c-1d13-49e7-baa6-d61f424befcb")]
 
@@ -14,3 +15,5 @@ using System.Windows;
                                               //(used if a resource is not found in the page, 
                                               // app, or any theme specific resource dictionaries)
     )]
+
+[assembly: XmlnsDefinition("https://github.com/github/VisualStudio", "GitHub.UI")]
